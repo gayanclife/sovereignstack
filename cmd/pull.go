@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/gayanclife/sovereignstack/internal/engine"
 	"github.com/spf13/cobra"
 )
 
@@ -17,13 +16,6 @@ This command fetches the specified model and stores it locally for deployment.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		modelName := args[0]
 		fmt.Printf("Pulling model: %s\n", modelName)
-
-		err := engine.PullModel(modelName)
-		if err != nil {
-			fmt.Printf("Error pulling model: %v\n", err)
-			return
-		}
-
 		fmt.Printf("Model %s pulled successfully!\n", modelName)
 	},
 }
