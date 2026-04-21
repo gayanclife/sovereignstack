@@ -2,98 +2,161 @@
 
 ## Project Overview
 
-**Project Title:** SovereignStack CLI (MVP)
+**Project Title:** SovereignStack
 
 **Objective:**  
-Build a Go-based CLI tool that automates the deployment of private, production-grade LLM inference servers on Bare Metal or Virtual Private Servers (VPS). The goal is to provide a "one-command" experience that rivals AWS Bedrock but runs on local hardware.
+Create a unified, open-source CLI and orchestration engine that allows developers to deploy private, production-ready AI inference clusters. The tool must prioritize a "Local-First" approach but use an abstraction layer that makes it 100% compatible with major cloud providers (AWS, Azure, GCP) in future phases.
 
 **Target User:**  
-DevOps engineers and System Administrators who need to host models like Llama 3 or Mistral internally for cost or privacy reasons.
+DevOps engineers, System Administrators, and AI practitioners who need to host models like Llama 3 or Mistral internally for cost, privacy, or regulatory compliance reasons.
 
-## Core Functional Requirements
+## Architecture: Provider-Based Design
 
-### 1. Hardware Pre-flight Check
-- **Detect NVIDIA GPUs and available VRAM:** Automatically scan the system for NVIDIA GPUs and report available VRAM.
-- **Verify CUDA driver installation:** Check if CUDA drivers are installed; provide instructions or automated installation for missing dependencies.
+SovereignStack uses a **Provider-based architecture** where the core logic is decoupled from the underlying infrastructure. The "Brain" of the software doesn't know about hardware; it only knows how to talk to a "Provider" interface.
 
-### 2. Automated Inference Engine Setup
-- **Deploy vLLM or Ollama via Docker containers:** Automate the deployment of vLLM (preferred for production-grade throughput) or Ollama (for easy local setup).
-- **Configure OpenAI-compatible API endpoint:** Set up the API endpoint to be compatible with OpenAI's API for seamless integration.
-
-### 3. Model Management
-- **Command: `sovstack pull [model-name]`** – Fetches model weights from Hugging Face or a private registry.
-- **Command: `sovstack deploy [model-name]`** – Starts the container with optimized GPU parameters (e.g., setting `--gpu-memory-utilization` based on detected VRAM).
-
-### 4. Local Observability
-- **Integration with Prometheus/Grafana:** Provide lightweight monitoring to track token-per-second (TPS) and GPU temperature.
-
-### 5. Secure Networking (Zero-Trust)
-- **Automatic setup of Tailscale or Wireguard tunnel:** Ensure the API is accessible privately without opening public ports.
-
-## Technical Stack
-
-- **Language:** Go (for a single binary executable)
-- **Containerization:** Docker / Docker Compose
-- **Orchestration:** K3s (optional for MVP, start with Docker Compose)
-- **Inference Engine:** vLLM
-
-## Project Directory Structure
+### Directory Structure
 
 ```
 sovereignstack/
-├── cmd/                # CLI Command logic (Cobra)
-│   ├── root.go         # The main 'sovstack' command
-│   ├── init.go         # 'sovstack init' - Hardware check
-│   └── deploy.go       # 'sovstack deploy' - Container logic
-├── internal/           # Private library code (The "Engine")
-│   ├── hardware/       # CPU, RAM, GPU detection logic
-│   ├── engine/         # Docker/vLLM orchestration
-│   └── tunnel/         # Tailscale/Networking logic
-├── pkg/                # Publicly sharable logic (Optional)
-├── main.go             # Entry point
-├── go.mod              # Go dependencies
-├── README.md           # Documentation
-└── docker-compose.yml  # Docker Compose configuration
+├── cli/                    # CLI entry point (Cobra-based)
+│   ├── cmd/
+│   │   ├── root.go
+│   │   ├── init.go
+│   │   ├── pull.go
+│   │   ├── up.go
+│   │   └── status.go
+│   └── main.go
+├── core/                   # Core business logic
+│   ├── model/             # Model management
+│   ├── gateway/           # HTTP reverse proxy and audit logging
+│   ├── audit/             # Encrypted SQLite audit logs
+│   └── config/            # Configuration management
+├── internal/
+│   ├── provider/          # Provider interface & implementations
+│   │   ├── interface.go   # Standard Provider interface
+│   │   ├── onprem/        # On-premises implementation (Docker/K3s)
+│   │   ├── aws/           # (Phase 2)
+│   │   ├── azure/         # (Phase 2)
+│   │   └── gcp/           # (Phase 2)
+│   ├── hardware/          # Hardware detection
+│   └── docker/            # Docker utilities
+├── pkg/                    # Public packages
+├── main.go                 # Application entry point
+├── go.mod
+└── README.md
 ```
 
-## Core CLI Logic
+## Core Functional Requirements (Phase 1)
 
-Implement the command parser using Cobra for Go:
-- Root command: `sovstack`
-- Subcommands: `init`, `pull`, `deploy`
-- Handle command-line arguments and flags appropriately.
+### A. The "Engine Room" (Inference)
 
-## Automation Scripts
+- **vLLM as Default Backend:** Use vLLM for high throughput and OpenAI-compatible API.
+- **Automatic Quantization:** Detect host VRAM and automatically suggest or apply the best quantization (AWQ, GPTQ) so models fit hardware.
+- **Flexible Model Support:** Support multiple models with dynamic configuration based on available resources.
 
-Write shell scripts or integrate into Go code for:
-- Hardware detection and CUDA verification
-- Docker container deployment and configuration
-- Model pulling and deployment with GPU optimization
+### B. The "Safety Net" (Local Gateway)
 
-## README Documentation
+- **Lightweight Reverse Proxy:** Built in Go, sits in front of the AI inference engine.
+- **Encrypted Audit Logging:** Every request/response logged to an encrypted SQLite database at rest (foundation for future "Medical" specialization).
+- **Rate Limiting:** Token-based bucket limits prevent GPU hogging by single users.
+- **Request/Response Validation:** Sanitize and validate all inputs before passing to inference engine.
 
-Provide clear instructions on:
-- How to build and install the CLI
-- Running `sovstack init` on a fresh Ubuntu server
-- Usage examples for `pull` and `deploy` commands
-- Prerequisites and troubleshooting
+### C. The "DevOps Shovel" (Orchestration)
 
-## Implementation Plan
+- **`sovstack init`:** Detects NVIDIA drivers, installs Container Toolkit, sets up local Docker network.
+- **`sovstack pull [model]`:** Downloads models from Hugging Face, saves to structured `/models` directory.
+- **`sovstack up`:** Orchestrates containers, networking, and proxy in one command.
+- **`sovstack status`:** Reports cluster health, resource usage, running models.
 
-1. Set up Go module and basic project structure
-2. Implement CLI framework with Cobra
-3. Develop hardware detection logic
-4. Create Docker orchestration for vLLM
-5. Implement model management commands
-6. Add observability integration
-7. Set up secure networking
-8. Write comprehensive README and documentation
-9. Testing and validation
+## Technical Stack (Phase 1)
 
-## Success Criteria
+- **Language:** Go 1.21+ (for a single binary executable)
+- **Containerization:** Docker / Docker Compose
+- **Inference Engine:** vLLM (OpenAI-compatible)
+- **Gateway:** Custom Go reverse proxy
+- **Audit Storage:** SQLite with encryption (optional: PostgreSQL for Phase 2)
+- **Monitoring:** Prometheus/Grafana (optional for MVP)
+- **Testing:** testcontainers-go for integration tests
 
-- Single binary executable that can be run on Ubuntu servers
-- Successful deployment of LLM models with one command
-- OpenAI-compatible API endpoint accessible securely
-- Monitoring dashboard for performance metrics
-- Zero public ports exposed for security
+## Provider Interface (Core Abstraction)
+
+All providers must implement the following interface:
+
+```go
+type Provider interface {
+    // Initialize sets up the infrastructure (networks, directories, etc.)
+    Initialize(ctx context.Context, config Config) error
+    
+    // RunModel deploys a model to the inference engine
+    RunModel(ctx context.Context, modelConfig ModelConfig) error
+    
+    // Status reports cluster health and resource usage
+    Status(ctx context.Context) (ClusterStatus, error)
+    
+    // Stop halts all running services
+    Stop(ctx context.Context) error
+}
+```
+
+This design allows seamless switching between on-prem, AWS, Azure, and GCP implementations in future phases.
+
+## CLI Commands
+
+```bash
+# Initialize the system (detect hardware, setup networks)
+sovstack init [--provider onprem]
+
+# Pull a model from Hugging Face
+sovstack pull [model-name] [--cache-dir /path]
+
+# Start the inference cluster
+sovstack up [--model model-name] [--quantization awq]
+
+# Check cluster status
+sovstack status
+
+# Stop all services
+sovstack down
+```
+
+## Implementation Roadmap
+
+### Phase 1 (MVP - Current Focus)
+- [ ] Task 1: Define project structure and Provider interface
+- [ ] Task 2: Implement OnPrem provider with Docker/K3s support
+- [ ] Task 3: Build core/gateway reverse proxy with audit logging
+- [ ] Task 4: Implement model management and quantization detection
+- [ ] Task 5: Create CLI commands (init, pull, up, status)
+- [ ] Task 6: Add hardware detection and CUDA verification
+
+### Phase 2 (Cloud Providers)
+- [ ] AWS provider implementation
+- [ ] Azure provider implementation
+- [ ] GCP provider implementation
+- [ ] Multi-region support
+
+### Phase 3 (Advanced Features)
+- [ ] Medical specialization with HIPAA audit trails
+- [ ] Multi-model orchestration
+- [ ] Advanced rate limiting and quotas
+- [ ] Federation between clusters
+
+## Phase 1 Success Criteria
+
+- Single binary executable that builds and runs on Ubuntu 20.04+
+- `sovstack init` successfully detects NVIDIA hardware and CUDA
+- `sovstack pull` downloads models from Hugging Face correctly
+- `sovstack up` deploys vLLM with automatic quantization
+- Gateway proxy logs all requests to encrypted SQLite database
+- OpenAI-compatible API accessible at `http://localhost:8000`
+- Rate limiting prevents GPU hogging
+- Zero public ports exposed (localhost only)
+- All code documented and tested
+
+## Non-Functional Requirements
+
+- **Performance:** Gateway adds <50ms latency per request
+- **Security:** Audit logs encrypted at rest, TLS for future cloud providers
+- **Maintainability:** Clean separation between core and providers
+- **Extensibility:** Adding new providers requires only implementing the interface
+- **Testing:** >80% code coverage, integration tests with testcontainers-go
