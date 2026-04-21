@@ -130,9 +130,44 @@ func (m *Manager) GetModelPath(modelName string) (string, error) {
 	return filepath.Join(m.cacheDir, modelName), nil
 }
 
+// GetSuitableModels returns models that can run on the detected hardware
+// If GPU is detected, returns GPU-optimized models
+// If CPU-only, returns CPU-optimized models that fit in system RAM
+func (m *Manager) GetSuitableModels(hasGPU bool, systemRAM int64) (suitable []*core.ModelMetadata, unavailable []*core.ModelMetadata) {
+	allModels := getCommonModels()
+
+	for _, model := range allModels {
+		switch {
+		// GPU available - recommend GPU models
+		case hasGPU:
+			if model.HardwareTarget == core.HardwareGPUOnly || model.HardwareTarget == core.HardwareBoth {
+				suitable = append(suitable, model)
+			} else {
+				unavailable = append(unavailable, model)
+			}
+
+		// CPU only - recommend CPU-optimized models that fit in RAM
+		case !hasGPU:
+			if model.HardwareTarget == core.HardwareCPUOptimized || model.HardwareTarget == core.HardwareBoth {
+				// Check if model fits in available system RAM
+				if model.MinimumSystemRAM <= systemRAM {
+					suitable = append(suitable, model)
+				} else {
+					unavailable = append(unavailable, model)
+				}
+			} else {
+				unavailable = append(unavailable, model)
+			}
+		}
+	}
+
+	return suitable, unavailable
+}
+
 // Common model registry - these are well-known models
 func getCommonModels() map[string]*core.ModelMetadata {
 	return map[string]*core.ModelMetadata{
+		// GPU-optimized models (large LLMs)
 		"meta-llama/Llama-2-7b-hf": {
 			Name:                "meta-llama/Llama-2-7b-hf",
 			Repo:                "meta-llama/Llama-2-7b-hf",
@@ -152,6 +187,8 @@ func getCommonModels() map[string]*core.ModelMetadata {
 				"gptq": 4 * 1024 * 1024 * 1024,  // ~4GB with overhead
 				"int8": 8 * 1024 * 1024 * 1024,  // ~8GB with overhead
 			},
+			HardwareTarget:   core.HardwareGPUOnly,
+			MinimumSystemRAM: 0, // Requires GPU
 		},
 		"meta-llama/Llama-2-13b-hf": {
 			Name:                "meta-llama/Llama-2-13b-hf",
@@ -172,6 +209,8 @@ func getCommonModels() map[string]*core.ModelMetadata {
 				"gptq": 7 * 1024 * 1024 * 1024,  // ~7GB with overhead
 				"int8": 15 * 1024 * 1024 * 1024, // ~15GB with overhead
 			},
+			HardwareTarget:   core.HardwareGPUOnly,
+			MinimumSystemRAM: 0, // Requires GPU
 		},
 		"mistralai/Mistral-7B-v0.1": {
 			Name:                "mistralai/Mistral-7B-v0.1",
@@ -192,6 +231,63 @@ func getCommonModels() map[string]*core.ModelMetadata {
 				"gptq": 4 * 1024 * 1024 * 1024,  // ~4GB with overhead
 				"int8": 8 * 1024 * 1024 * 1024,  // ~8GB with overhead
 			},
+			HardwareTarget:   core.HardwareGPUOnly,
+			MinimumSystemRAM: 0, // Requires GPU
+		},
+		// CPU-optimized models (small LLMs and embeddings)
+		"distilbert-base-uncased": {
+			Name:                "distilbert-base-uncased",
+			Repo:                "distilbert-base-uncased",
+			ParameterCount:      66e6,
+			DefaultQuantization: core.QuantizationINT8,
+			Size: map[string]int64{
+				"none": 250 * 1024 * 1024, // ~250MB FP32
+				"int8": 100 * 1024 * 1024, // ~100MB INT8
+			},
+			Context:     512,
+			Description: "DistilBERT - lightweight BERT variant for CPU inference",
+			RequiredVRAM: map[string]int64{
+				"none": 0, // CPU-only
+				"int8": 0, // CPU-only
+			},
+			HardwareTarget:   core.HardwareCPUOptimized,
+			MinimumSystemRAM: 512 * 1024 * 1024, // ~512MB
+		},
+		"TinyLlama/TinyLlama-1.1B": {
+			Name:                "TinyLlama/TinyLlama-1.1B",
+			Repo:                "TinyLlama/TinyLlama-1.1B",
+			ParameterCount:      1.1e9,
+			DefaultQuantization: core.QuantizationINT8,
+			Size: map[string]int64{
+				"none": 2 * 1024 * 1024 * 1024, // ~2GB FP16
+				"int8": 1 * 1024 * 1024 * 1024, // ~1GB INT8
+			},
+			Context:     2048,
+			Description: "TinyLlama - small LLM optimized for CPU inference",
+			RequiredVRAM: map[string]int64{
+				"none": 0, // CPU-only
+				"int8": 0, // CPU-only
+			},
+			HardwareTarget:   core.HardwareCPUOptimized,
+			MinimumSystemRAM: 3 * 1024 * 1024 * 1024, // ~3GB
+		},
+		"microsoft/phi-2": {
+			Name:                "microsoft/phi-2",
+			Repo:                "microsoft/phi-2",
+			ParameterCount:      2.7e9,
+			DefaultQuantization: core.QuantizationINT8,
+			Size: map[string]int64{
+				"none": 5 * 1024 * 1024 * 1024, // ~5GB FP16
+				"int8": 2 * 1024 * 1024 * 1024, // ~2GB INT8
+			},
+			Context:     2048,
+			Description: "Microsoft Phi-2 - efficient small language model for CPU",
+			RequiredVRAM: map[string]int64{
+				"none": 0, // CPU-only
+				"int8": 0, // CPU-only
+			},
+			HardwareTarget:   core.HardwareCPUOptimized,
+			MinimumSystemRAM: 6 * 1024 * 1024 * 1024, // ~6GB
 		},
 	}
 }

@@ -119,15 +119,37 @@ sovstack status
 sovstack down
 ```
 
+## Hardware-Aware Model Selection (MVP Feature)
+
+SovereignStack now supports both **GPU and CPU deployments** with intelligent model filtering:
+
+- **GPU Systems:** Recommends full-size models (Llama 2 7B/13B, Mistral 7B) with quantization options
+- **CPU-Only Systems:** Recommends lightweight CPU-optimized models that fit available RAM
+- **Automatic Validation:** Prevents deploying incompatible models and suggests alternatives
+
+### Supported Models
+
+**GPU-Optimized (Default):**
+- Meta Llama 2 7B (13GB FP16, 3GB AWQ)
+- Meta Llama 2 13B (26GB FP16, 6GB AWQ)
+- Mistral 7B (13GB FP16, 3GB AWQ, 32k context)
+
+**CPU-Optimized:**
+- DistilBERT (250MB, requires 512MB RAM)
+- TinyLlama 1.1B (2GB, requires 3GB RAM)
+- Microsoft Phi-2 (5GB, requires 6GB RAM)
+
 ## Implementation Roadmap
 
-### Phase 1 (MVP - Current Focus)
-- [ ] Task 1: Define project structure and Provider interface
-- [ ] Task 2: Implement OnPrem provider with Docker/K3s support
-- [ ] Task 3: Build core/gateway reverse proxy with audit logging
-- [ ] Task 4: Implement model management and quantization detection
-- [ ] Task 5: Create CLI commands (init, pull, up, status)
-- [ ] Task 6: Add hardware detection and CUDA verification
+### Phase 1 (MVP - In Progress)
+- [x] Task 1: Define project structure and Provider interface
+- [x] Task 2: Implement hardware detection (GPU/CPU/CUDA/RAM)
+- [x] Task 3: Add CPU-support with hardware-aware model filtering
+- [x] Task 4: Implement model management and quantization detection
+- [x] Task 5: Create CLI commands (init, pull, deploy) with hardware validation
+- [x] Task 6: System RAM detection and model compatibility checking
+- [ ] Task 7: Build core/gateway reverse proxy with audit logging
+- [ ] Task 8: Implement OnPrem provider with Docker/K3s support
 
 ### Phase 2 (Cloud Providers)
 - [ ] AWS provider implementation

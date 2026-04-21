@@ -1,5 +1,4 @@
 package docker
-package docker
 
 import (
 	"context"
@@ -14,15 +13,15 @@ import (
 
 // VLLMConfig represents vLLM container configuration
 type VLLMConfig struct {
-	ModelPath           string
-	ModelName           string
-	Quantization        core.QuantizationType
-	GPUIndices          []int
-	MaxModelLen         int
-	ContextLength       int
+	ModelPath            string
+	ModelName            string
+	Quantization         core.QuantizationType
+	GPUIndices           []int
+	MaxModelLen          int
+	ContextLength        int
 	GPUMemoryUtilization float32
-	TensorParallelSize  int
-	Port                int
+	TensorParallelSize   int
+	Port                 int
 }
 
 // VLLMOrchestrator manages vLLM container lifecycle

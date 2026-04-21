@@ -49,17 +49,13 @@ func NewEngineRoom(config EngineConfig) (*EngineRoom, error) {
 		return nil, fmt.Errorf("failed to detect hardware: %w", err)
 	}
 
-	if len(hw.GPUs) == 0 {
-		return nil, fmt.Errorf("no NVIDIA GPUs detected")
-	}
-
 	// Create model manager
 	modelMgr, err := model.NewManager(config.ModelCacheDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create model manager: %w", err)
 	}
 
-	// Calculate available VRAM
+	// Calculate available VRAM (0 if no GPUs)
 	availableVRAM := hw.TotalAvailable
 	if config.VRAMLimit > 0 && config.VRAMLimit < availableVRAM {
 		availableVRAM = config.VRAMLimit
@@ -77,6 +73,13 @@ func NewEngineRoom(config EngineConfig) (*EngineRoom, error) {
 // GetSystemInfo returns information about the system
 func (er *EngineRoom) GetSystemInfo() *hardware.SystemHardware {
 	return er.hardware
+}
+
+// GetSuitableModels returns models that can run on the detected hardware
+// Returns two slices: suitable models and unavailable models with reasons
+func (er *EngineRoom) GetSuitableModels() (suitable []*core.ModelMetadata, unavailable []*core.ModelMetadata) {
+	hasGPU := len(er.hardware.GPUs) > 0
+	return er.modelManager.GetSuitableModels(hasGPU, er.hardware.SystemRAM)
 }
 
 // PlanDeployment analyzes a model and creates a deployment plan

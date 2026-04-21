@@ -3,6 +3,7 @@ package hardware
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -90,8 +91,9 @@ func GetSystemHardware() (*SystemHardware, error) {
 	}
 
 	hardware := &SystemHardware{
-		GPUs:     gpus,
-		CPUCores: runtime.NumCPU(),
+		GPUs:      gpus,
+		CPUCores:  runtime.NumCPU(),
+		SystemRAM: GetSystemRAM(),
 	}
 
 	for _, gpu := range gpus {
@@ -113,6 +115,33 @@ func CheckDocker() bool {
 	cmd := exec.Command("docker", "--version")
 	err := cmd.Run()
 	return err == nil
+}
+
+// GetSystemRAM returns total system RAM in bytes
+func GetSystemRAM() int64 {
+	// Try reading from /proc/meminfo on Linux
+	file, err := os.Open("/proc/meminfo")
+	if err == nil {
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "MemTotal:") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					// Value is in KB, convert to bytes
+					kb, _ := strconv.ParseInt(parts[1], 10, 64)
+					return kb * 1024
+				}
+			}
+		}
+	}
+
+	// Fallback: use runtime package (returns bytes allocated to Go runtime)
+	// This is not accurate for total system RAM but better than 0
+	m := runtime.MemStats{}
+	runtime.ReadMemStats(&m)
+	return int64(m.Sys)
 }
 
 // CheckCUDA checks if CUDA is installed and returns version
