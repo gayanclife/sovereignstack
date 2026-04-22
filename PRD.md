@@ -126,6 +126,7 @@ SovereignStack now supports both **GPU and CPU deployments** with intelligent mo
 - **GPU Systems:** Recommends full-size models (Llama 2 7B/13B, Mistral 7B) with quantization options
 - **CPU-Only Systems:** Recommends lightweight CPU-optimized models that fit available RAM
 - **Automatic Validation:** Prevents deploying incompatible models and suggests alternatives
+- **Configurable Model Registry:** Add new models via `models.yaml` without code changes
 
 ### Supported Models
 
@@ -139,6 +140,31 @@ SovereignStack now supports both **GPU and CPU deployments** with intelligent mo
 - TinyLlama 1.1B (2GB, requires 3GB RAM)
 - Microsoft Phi-2 (5GB, requires 6GB RAM)
 
+### Dynamic Model Registry
+
+Models are loaded from **`models.yaml`** (configuration-driven, not hardcoded):
+
+```yaml
+gpu_models:
+  - name: meta-llama/Llama-2-7b-hf
+    repo: meta-llama/Llama-2-7b-hf
+    parameters: "7B"
+    hardware_target: gpu
+    # ... specification continues
+```
+
+**Model Loading Precedence:**
+1. Bundled (`models.yaml`) - Default models in SovereignStack
+2. System-wide (`/etc/sovereignstack/models.yaml`) - System administrator customization
+3. User-specific (`~/.sovereignstack/models.yaml`) - Personal model registry
+4. Project-local (`./models.local.yaml`) - Per-project override
+
+This design allows:
+- **Community Contributions:** Users add models by editing YAML (no code changes needed)
+- **Flexibility:** Different models per system/user/project
+- **Fallback Safety:** Hardcoded defaults used if YAML files unavailable
+- **Open-Source Ready:** Easy for the community to extend with custom models
+
 ## Implementation Roadmap
 
 ### Phase 1 (MVP - In Progress)
@@ -148,8 +174,14 @@ SovereignStack now supports both **GPU and CPU deployments** with intelligent mo
 - [x] Task 4: Implement model management and quantization detection
 - [x] Task 5: Create CLI commands (init, pull, deploy) with hardware validation
 - [x] Task 6: System RAM detection and model compatibility checking
-- [ ] Task 7: Build core/gateway reverse proxy with audit logging
-- [ ] Task 8: Implement OnPrem provider with Docker/K3s support
+- [x] Task 7: Dynamic model loading with YAML configuration
+  - YAML-based model registry (`models.yaml`)
+  - Multiple config source support (project/system/user/bundled)
+  - Fallback to hardcoded defaults when YAML unavailable
+  - Community-friendly model contribution system
+  - Per-project customization (`models.local.yaml`)
+- [ ] Task 8: Build core/gateway reverse proxy with audit logging
+- [ ] Task 9: Implement OnPrem provider with Docker/K3s support
 
 ### Phase 2 (Cloud Providers)
 - [ ] AWS provider implementation

@@ -152,6 +152,51 @@ response = client.chat.completions.create(
 )
 ```
 
+## Supported Models
+
+SovereignStack uses a **configuration-driven model system** that's easy to extend. Models are loaded dynamically from `models.yaml` based on your hardware.
+
+### Built-in Models
+
+**GPU-Optimized:**
+- Meta Llama 2 7B (13GB FP16, 3GB AWQ)
+- Meta Llama 2 13B (26GB FP16, 6GB AWQ)
+- Mistral 7B (13GB FP16, 3GB AWQ, 32k context)
+
+**CPU-Optimized:**
+- DistilBERT (250MB, requires 512MB RAM)
+- TinyLlama 1.1B (2GB, requires 3GB RAM)
+- Microsoft Phi-2 (5GB, requires 6GB RAM)
+
+### Contributing Models
+
+Models are defined in `models.yaml` - **no code changes needed** to add new models!
+
+**Quick example to add a new GPU model:**
+
+```yaml
+gpu_models:
+  - name: my-awesome-model/7b
+    repo: huggingface-org/my-model
+    description: "My awesome model"
+    parameters: "7B"
+    context_length: 4096
+    hardware_target: gpu
+    sizes: {none: 13858000000, awq: 3200000000, ...}
+    required_vram_gb: {none: 14, awq: 4, ...}
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full model specification guide.
+
+### Model Loading Precedence
+
+1. **Bundled** (`models.yaml`) - Default models in SovereignStack
+2. **System** (`/etc/sovereignstack/models.yaml`) - System-wide customization
+3. **User** (`~/.sovereignstack/models.yaml`) - Personal model registry  
+4. **Project** (`./models.local.yaml`) - Per-project models
+
+Later sources override earlier ones, enabling easy customization.
+
 ## Monitoring
 
 Start the monitoring stack:

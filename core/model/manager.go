@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/gayanclife/sovereignstack/core"
@@ -11,9 +12,17 @@ import (
 
 // Manager handles model lifecycle (download, cache, validation)
 type Manager struct {
-	cacheDir string
-	models   map[string]*core.ModelCache // In-memory cache registry
+	cacheDir    string
+	models      map[string]*core.ModelCache // In-memory cache registry
+	modelsMeta  map[string]*core.ModelMetadata
+	modelsMutex sync.RWMutex
 }
+
+var (
+	// Global models registry, loaded once
+	globalModels map[string]*core.ModelMetadata
+	modelsMutex  sync.Once
+)
 
 // NewManager creates a new model manager
 func NewManager(cacheDir string) (*Manager, error) {
@@ -22,9 +31,20 @@ func NewManager(cacheDir string) (*Manager, error) {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
+	// Load models from configuration (only once)
+	modelsMutex.Do(func() {
+		var err error
+		globalModels, err = LoadAllModels()
+		if err != nil {
+			fmt.Printf("Warning: failed to load models from config: %v\n", err)
+			globalModels = make(map[string]*core.ModelMetadata)
+		}
+	})
+
 	return &Manager{
-		cacheDir: cacheDir,
-		models:   make(map[string]*core.ModelCache),
+		cacheDir:   cacheDir,
+		models:     make(map[string]*core.ModelCache),
+		modelsMeta: globalModels,
 	}, nil
 }
 
@@ -59,7 +79,9 @@ func (m *Manager) ListCachedModels() ([]core.ModelCache, error) {
 
 // GetModel retrieves model metadata
 func (m *Manager) GetModel(modelName string) *core.ModelMetadata {
-	return getCommonModels()[modelName]
+	m.modelsMutex.RLock()
+	defer m.modelsMutex.RUnlock()
+	return m.modelsMeta[modelName]
 }
 
 // ValidateModel checks if a model is available and valid
@@ -134,7 +156,9 @@ func (m *Manager) GetModelPath(modelName string) (string, error) {
 // If GPU is detected, returns GPU-optimized models
 // If CPU-only, returns CPU-optimized models that fit in system RAM
 func (m *Manager) GetSuitableModels(hasGPU bool, systemRAM int64) (suitable []*core.ModelMetadata, unavailable []*core.ModelMetadata) {
-	allModels := getCommonModels()
+	m.modelsMutex.RLock()
+	allModels := m.modelsMeta
+	m.modelsMutex.RUnlock()
 
 	for _, model := range allModels {
 		switch {
@@ -162,132 +186,4 @@ func (m *Manager) GetSuitableModels(hasGPU bool, systemRAM int64) (suitable []*c
 	}
 
 	return suitable, unavailable
-}
-
-// Common model registry - these are well-known models
-func getCommonModels() map[string]*core.ModelMetadata {
-	return map[string]*core.ModelMetadata{
-		// GPU-optimized models (large LLMs)
-		"meta-llama/Llama-2-7b-hf": {
-			Name:                "meta-llama/Llama-2-7b-hf",
-			Repo:                "meta-llama/Llama-2-7b-hf",
-			ParameterCount:      7e9,
-			DefaultQuantization: core.QuantizationAWQ,
-			Size: map[string]int64{
-				"none": 13 * 1024 * 1024 * 1024, // ~13GB FP16
-				"awq":  3 * 1024 * 1024 * 1024,  // ~3GB INT4
-				"gptq": 3 * 1024 * 1024 * 1024,  // ~3GB INT4
-				"int8": 7 * 1024 * 1024 * 1024,  // ~7GB INT8
-			},
-			Context:     4096,
-			Description: "Meta's Llama 2 7B parameter model",
-			RequiredVRAM: map[string]int64{
-				"none": 14 * 1024 * 1024 * 1024, // ~14GB with overhead
-				"awq":  4 * 1024 * 1024 * 1024,  // ~4GB with overhead
-				"gptq": 4 * 1024 * 1024 * 1024,  // ~4GB with overhead
-				"int8": 8 * 1024 * 1024 * 1024,  // ~8GB with overhead
-			},
-			HardwareTarget:   core.HardwareGPUOnly,
-			MinimumSystemRAM: 0, // Requires GPU
-		},
-		"meta-llama/Llama-2-13b-hf": {
-			Name:                "meta-llama/Llama-2-13b-hf",
-			Repo:                "meta-llama/Llama-2-13b-hf",
-			ParameterCount:      13e9,
-			DefaultQuantization: core.QuantizationAWQ,
-			Size: map[string]int64{
-				"none": 26 * 1024 * 1024 * 1024, // ~26GB FP16
-				"awq":  6 * 1024 * 1024 * 1024,  // ~6GB INT4
-				"gptq": 6 * 1024 * 1024 * 1024,  // ~6GB INT4
-				"int8": 13 * 1024 * 1024 * 1024, // ~13GB INT8
-			},
-			Context:     4096,
-			Description: "Meta's Llama 2 13B parameter model",
-			RequiredVRAM: map[string]int64{
-				"none": 28 * 1024 * 1024 * 1024, // ~28GB with overhead
-				"awq":  7 * 1024 * 1024 * 1024,  // ~7GB with overhead
-				"gptq": 7 * 1024 * 1024 * 1024,  // ~7GB with overhead
-				"int8": 15 * 1024 * 1024 * 1024, // ~15GB with overhead
-			},
-			HardwareTarget:   core.HardwareGPUOnly,
-			MinimumSystemRAM: 0, // Requires GPU
-		},
-		"mistralai/Mistral-7B-v0.1": {
-			Name:                "mistralai/Mistral-7B-v0.1",
-			Repo:                "mistralai/Mistral-7B-v0.1",
-			ParameterCount:      7e9,
-			DefaultQuantization: core.QuantizationAWQ,
-			Size: map[string]int64{
-				"none": 13 * 1024 * 1024 * 1024, // ~13GB FP16
-				"awq":  3 * 1024 * 1024 * 1024,  // ~3GB INT4
-				"gptq": 3 * 1024 * 1024 * 1024,  // ~3GB INT4
-				"int8": 7 * 1024 * 1024 * 1024,  // ~7GB INT8
-			},
-			Context:     32768,
-			Description: "Mistral's 7B parameter model with extended context",
-			RequiredVRAM: map[string]int64{
-				"none": 14 * 1024 * 1024 * 1024, // ~14GB with overhead
-				"awq":  4 * 1024 * 1024 * 1024,  // ~4GB with overhead
-				"gptq": 4 * 1024 * 1024 * 1024,  // ~4GB with overhead
-				"int8": 8 * 1024 * 1024 * 1024,  // ~8GB with overhead
-			},
-			HardwareTarget:   core.HardwareGPUOnly,
-			MinimumSystemRAM: 0, // Requires GPU
-		},
-		// CPU-optimized models (small LLMs and embeddings)
-		"distilbert-base-uncased": {
-			Name:                "distilbert-base-uncased",
-			Repo:                "distilbert-base-uncased",
-			ParameterCount:      66e6,
-			DefaultQuantization: core.QuantizationINT8,
-			Size: map[string]int64{
-				"none": 250 * 1024 * 1024, // ~250MB FP32
-				"int8": 100 * 1024 * 1024, // ~100MB INT8
-			},
-			Context:     512,
-			Description: "DistilBERT - lightweight BERT variant for CPU inference",
-			RequiredVRAM: map[string]int64{
-				"none": 0, // CPU-only
-				"int8": 0, // CPU-only
-			},
-			HardwareTarget:   core.HardwareCPUOptimized,
-			MinimumSystemRAM: 512 * 1024 * 1024, // ~512MB
-		},
-		"TinyLlama/TinyLlama-1.1B": {
-			Name:                "TinyLlama/TinyLlama-1.1B",
-			Repo:                "TinyLlama/TinyLlama-1.1B",
-			ParameterCount:      1.1e9,
-			DefaultQuantization: core.QuantizationINT8,
-			Size: map[string]int64{
-				"none": 2 * 1024 * 1024 * 1024, // ~2GB FP16
-				"int8": 1 * 1024 * 1024 * 1024, // ~1GB INT8
-			},
-			Context:     2048,
-			Description: "TinyLlama - small LLM optimized for CPU inference",
-			RequiredVRAM: map[string]int64{
-				"none": 0, // CPU-only
-				"int8": 0, // CPU-only
-			},
-			HardwareTarget:   core.HardwareCPUOptimized,
-			MinimumSystemRAM: 3 * 1024 * 1024 * 1024, // ~3GB
-		},
-		"microsoft/phi-2": {
-			Name:                "microsoft/phi-2",
-			Repo:                "microsoft/phi-2",
-			ParameterCount:      2.7e9,
-			DefaultQuantization: core.QuantizationINT8,
-			Size: map[string]int64{
-				"none": 5 * 1024 * 1024 * 1024, // ~5GB FP16
-				"int8": 2 * 1024 * 1024 * 1024, // ~2GB INT8
-			},
-			Context:     2048,
-			Description: "Microsoft Phi-2 - efficient small language model for CPU",
-			RequiredVRAM: map[string]int64{
-				"none": 0, // CPU-only
-				"int8": 0, // CPU-only
-			},
-			HardwareTarget:   core.HardwareCPUOptimized,
-			MinimumSystemRAM: 6 * 1024 * 1024 * 1024, // ~6GB
-		},
-	}
 }
