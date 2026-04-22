@@ -211,6 +211,54 @@ Access Grafana at `http://localhost:3000` (admin/admin) to monitor:
 - Memory usage
 - System metrics
 
+## API Gateway (Authentication & Audit Logging)
+
+For production deployments, use the built-in reverse proxy gateway with authentication and audit logging:
+
+### Start the Gateway
+
+```bash
+sovstack gateway \
+  --backend http://localhost:8000 \
+  --port 8001 \
+  --rate-limit 100 \
+  --api-key-header X-API-Key \
+  --audit-buffer 10000
+```
+
+**Features:**
+- ✓ Authentication via API keys
+- ✓ Rate limiting (tokens per minute per user)
+- ✓ Complete audit logging with correlation IDs
+- ✓ Performance metrics (response time, tokens used)
+- ✓ Request tracing for debugging
+- ✓ Compliance-ready log access
+
+### Using the Gateway
+
+```bash
+# Make authenticated request
+curl -H "X-API-Key: sk_test_123" \
+  http://localhost:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "llama-2", "messages": [{"role": "user", "content": "Hello"}]}'
+
+# View audit logs (last 50)
+curl http://localhost:8001/api/audit/logs?n=50
+
+# Get audit statistics
+curl http://localhost:8001/api/audit/stats
+```
+
+### Adding Custom API Keys
+
+Edit the gateway code to add your own keys or implement OAuth2/OIDC authentication:
+
+```go
+authProvider := gateway.NewAPIKeyAuthProvider()
+authProvider.AddKey("sk_your_key_123", "your-user-id")
+```
+
 ## Security
 
 The tool sets up secure networking to ensure the API is only accessible privately without exposing public ports.

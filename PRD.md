@@ -165,6 +165,47 @@ This design allows:
 - **Fallback Safety:** Hardcoded defaults used if YAML files unavailable
 - **Open-Source Ready:** Easy for the community to extend with custom models
 
+## Gateway & API Security
+
+SovereignStack includes a production-ready reverse proxy gateway for secure access to inference endpoints:
+
+### Authentication & Authorization
+- **API Key Based:** Simple token validation system
+- **Pluggable Auth Provider:** Easy to integrate OAuth2, OIDC, or custom auth
+- **Request Validation:** Type checking and input sanitization
+
+### Audit Logging
+- **Complete Request Tracing:** Every request logged with correlation IDs
+- **Performance Metrics:** Response times, token counts, model used
+- **Compliance Ready:** Audit logs queryable by user, model, time range
+- **In-Memory Buffer:** Configurable history for quick lookups
+
+### Rate Limiting
+- **Per-User Tokens:** Token bucket algorithm for fair resource sharing
+- **Configurable Limits:** Set requests per minute per user
+- **Flexible Policies:** Unlimited mode for development
+
+### API Endpoints
+- **Request Routing:** Forwards traffic to backend vLLM service
+- **Health Checks:** Monitors backend availability
+- **Error Handling:** Graceful degradation on backend failures
+- **Audit Access:** `/api/audit/logs` and `/api/audit/stats` endpoints
+
+### Example Usage
+```bash
+# Start the gateway
+sovstack gateway --backend http://localhost:8000 --port 8001 --rate-limit 100
+
+# Make authenticated request
+curl -H "X-API-Key: sk_test_123" http://localhost:8001/v1/completions
+
+# View audit logs
+curl http://localhost:8001/api/audit/logs?n=50
+
+# Get statistics
+curl http://localhost:8001/api/audit/stats
+```
+
 ## Implementation Roadmap
 
 ### Phase 1 (MVP - In Progress)
@@ -180,7 +221,14 @@ This design allows:
   - Fallback to hardcoded defaults when YAML unavailable
   - Community-friendly model contribution system
   - Per-project customization (`models.local.yaml`)
-- [ ] Task 8: Build core/gateway reverse proxy with audit logging
+- [x] Task 8: Build core/gateway reverse proxy with audit logging
+  - HTTP reverse proxy with authentication
+  - API key validation with customizable auth provider
+  - Request/response audit logging with correlation IDs
+  - Rate limiting per user (tokens per minute)
+  - Request tracing and performance metrics
+  - Audit log endpoints for querying and stats
+  - Graceful handling of backend failures
 - [ ] Task 9: Implement OnPrem provider with Docker/K3s support
 
 ### Phase 2 (Cloud Providers)
