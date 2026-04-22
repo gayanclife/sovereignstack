@@ -1,40 +1,78 @@
-# Binaries for programs and plugins
+# === Project Binaries & Build Artifacts ===
+bin/
+dist/
+build/
+out/
+sovstack
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-sovstack
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
-# Dependency directories (uncomment if using vendoring)
-# vendor/
-
-# Go workspace file
+# === Language Specific (Go / Python) ===
+# Go
 go.work
-
-# Go build cache
+/pkg/
+/go.sum.bak
 .cache/
 
-# Go module proxy cache
-/pkg/
+# Python (if using for scripts/testing)
+__pycache__/
+venv/
+.venv/
+*.py[cod]
+*$py.class
 
-# Go sum database
-/go.sum.bak
+# === AI/ML Data (The Heavy Stuff) ===
+models/              # Large Language Model weights
+datasets/            # Training/Fine-tuning data
+.cache/huggingface/  # HF cache directory
+.cache/vllm/         # vLLM cache directory
 
-# IDE and editor files
+# === Infrastructure & DevOps ===
+# Docker
+volumes/
+docker-compose.override.yml
+
+# Terraform (Future Phase)
+.terraform/
+*.tfstate*
+*.tfvars
+.terraform.lock.hcl
+
+# Cloud CLI configs
+.aws/
+.azure/
+.gcloud/
+
+# Monitoring Data
+monitoring/data/
+grafana_data/
+
+# === Security, Secrets & Privacy ===
+# Environment & Keys
+.env
+.env.*
+!.env.example        # Keep example file for others
+*.pem
+*.key
+credentials.json
+
+# Medical/Audit Logs (Sensitive!)
+*.db                 # Local SQLite audit logs
+*.db-journal
+*.log
+logs/
+
+# === IDE & OS Garbage ===
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS generated files
 .DS_Store
 .DS_Store?
 ._*
@@ -43,33 +81,6 @@ go.work
 ehthumbs.db
 Thumbs.db
 
-# Logs
-*.log
-logs/
-
-# Temporary files
+# === Temp Files ===
 *.tmp
 *.temp
-
-# Docker volumes (if any)
-volumes/
-
-# Environment files
-.env
-.env.local
-.env.*.local
-
-# Hugging Face cache (if not using persistent volumes)
-# ~/.cache/huggingface/
-
-# Prometheus/Grafana data
-monitoring/data/
-grafana_data/
-
-# Build artifacts
-dist/
-build/
-
-# Release archives
-*.tar.gz
-*.zip
