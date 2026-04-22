@@ -3,23 +3,46 @@ package hardware
 import (
 	"bufio"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 )
 
 // GPU represents a detected GPU
 type GPU struct {
-	Name string
-	VRAM int // in bytes
+	Index          int     `json:"index"`
+	Name           string  `json:"name"`
+	VRAM           int64   `json:"vram_bytes"`     // Total VRAM in bytes
+	VRAMAvailable  int64   `json:"vram_available"` // Available VRAM in bytes
+	Driver         string  `json:"driver_version"`
+	CUDACapability string  `json:"cuda_capability"` // e.g., "8.0"
+	Temperature    float32 `json:"temperature_celsius"`
+}
+
+// SystemHardware represents overall system hardware info
+type SystemHardware struct {
+	GPUs            []GPU  `json:"gpus"`
+	TotalVRAM       int64  `json:"total_vram_bytes"`
+	TotalAvailable  int64  `json:"total_available_bytes"`
+	CPUCores        int    `json:"cpu_cores"`
+	SystemRAM       int64  `json:"system_ram_bytes"`
+	CUDAInstalled   bool   `json:"cuda_installed"`
+	CUDAVersion     string `json:"cuda_version"`
+	DockerInstalled bool   `json:"docker_installed"`
 }
 
 // DetectGPUs detects NVIDIA GPUs and their VRAM
 func DetectGPUs() ([]GPU, error) {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits")
+	cmd := exec.Command(
+		"nvidia-smi",
+		"--query-gpu=index,name,memory.total,memory.free,driver_version,compute_cap,temperature.gpu",
+		"--format=csv,noheader,nounits",
+	)
 	output, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("failed to run nvidia-smi: %v", err)
+		return nil, fmt.Errorf("nvidia-smi not found or failed: %w", err)
 	}
 
 	var gpus []GPU
@@ -30,20 +53,95 @@ func DetectGPUs() ([]GPU, error) {
 			continue
 		}
 		parts := strings.Split(line, ",")
-		if len(parts) != 2 {
+		if len(parts) < 7 {
 			continue
 		}
-		name := strings.TrimSpace(parts[0])
-		vramStr := strings.TrimSpace(parts[1])
-		vramMB, err := strconv.Atoi(vramStr)
-		if err != nil {
-			continue
-		}
-		vramBytes := vramMB * 1024 * 1024
-		gpus = append(gpus, GPU{Name: name, VRAM: vramBytes})
+
+		idx, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+		name := strings.TrimSpace(parts[1])
+		totalVRAM, _ := strconv.ParseInt(strings.TrimSpace(parts[2]), 10, 64)
+		availableVRAM, _ := strconv.ParseInt(strings.TrimSpace(parts[3]), 10, 64)
+		driver := strings.TrimSpace(parts[4])
+		capability := strings.TrimSpace(parts[5])
+		temp, _ := strconv.ParseFloat(strings.TrimSpace(parts[6]), 32)
+
+		// Convert MB to bytes
+		totalVRAM *= 1024 * 1024
+		availableVRAM *= 1024 * 1024
+
+		gpus = append(gpus, GPU{
+			Index:          idx,
+			Name:           name,
+			VRAM:           totalVRAM,
+			VRAMAvailable:  availableVRAM,
+			Driver:         driver,
+			CUDACapability: capability,
+			Temperature:    float32(temp),
+		})
 	}
 
 	return gpus, nil
+}
+
+// GetSystemHardware returns comprehensive hardware information
+func GetSystemHardware() (*SystemHardware, error) {
+	gpus, err := DetectGPUs()
+	if err != nil {
+		gpus = []GPU{} // Continue even if no GPUs found
+	}
+
+	hardware := &SystemHardware{
+		GPUs:      gpus,
+		CPUCores:  runtime.NumCPU(),
+		SystemRAM: GetSystemRAM(),
+	}
+
+	for _, gpu := range gpus {
+		hardware.TotalVRAM += gpu.VRAM
+		hardware.TotalAvailable += gpu.VRAMAvailable
+	}
+
+	// Check CUDA
+	hardware.CUDAInstalled, hardware.CUDAVersion, _ = CheckCUDA()
+
+	// Check Docker
+	hardware.DockerInstalled = CheckDocker()
+
+	return hardware, nil
+}
+
+// CheckDocker verifies Docker installation
+func CheckDocker() bool {
+	cmd := exec.Command("docker", "--version")
+	err := cmd.Run()
+	return err == nil
+}
+
+// GetSystemRAM returns total system RAM in bytes
+func GetSystemRAM() int64 {
+	// Try reading from /proc/meminfo on Linux
+	file, err := os.Open("/proc/meminfo")
+	if err == nil {
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(line, "MemTotal:") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					// Value is in KB, convert to bytes
+					kb, _ := strconv.ParseInt(parts[1], 10, 64)
+					return kb * 1024
+				}
+			}
+		}
+	}
+
+	// Fallback: use runtime package (returns bytes allocated to Go runtime)
+	// This is not accurate for total system RAM but better than 0
+	m := runtime.MemStats{}
+	runtime.ReadMemStats(&m)
+	return int64(m.Sys)
 }
 
 // CheckCUDA checks if CUDA is installed and returns version

@@ -1,0 +1,160 @@
+# SovereignStack Model Registry
+# 
+# This file defines all available models for deployment.
+# Community contributions are welcome! See CONTRIBUTING.md for guidelines.
+#
+# Format:
+#   - name: Unique model identifier (used with 'sovstack deploy')
+#     repo: Hugging Face repository ID
+#     description: Human-readable description
+#     parameters: Number of parameters (e.g., "7B", "13B", "1.1B")
+#     context_length: Max token context window
+#     hardware_target: "gpu" | "cpu" | "both"
+#     minimum_system_ram_gb: Minimum RAM required (for CPU models)
+#     sizes:
+#       none: Model size in full precision (bytes)
+#       int8: Model size with INT8 quantization (bytes)
+#       awq: Model size with AWQ quantization (bytes)
+#       gptq: Model size with GPTQ quantization (bytes)
+#     required_vram_gb:
+#       none: GPU VRAM needed in full precision (GB)
+#       int8: GPU VRAM needed with INT8 (GB)
+#       awq: GPU VRAM needed with AWQ (GB)
+#       gptq: GPU VRAM needed with GPTQ (GB)
+#     default_quantization: "none" | "int8" | "awq" | "gptq"
+#     tags: [list of tags for filtering/discovery]
+
+# ============================================================================
+# GPU-OPTIMIZED MODELS (Large LLMs)
+# ============================================================================
+
+gpu_models:
+  - name: meta-llama/Llama-2-7b-hf
+    repo: meta-llama/Llama-2-7b-hf
+    description: "Meta's Llama 2 7B - highly capable general-purpose model"
+    parameters: "7B"
+    context_length: 4096
+    hardware_target: gpu
+    minimum_system_ram_gb: 0
+    sizes:
+      none: 13858000000      # ~13GB FP16
+      int8: 7456000000       # ~7GB INT8
+      awq: 3200000000        # ~3GB INT4
+      gptq: 3200000000       # ~3GB INT4
+    required_vram_gb:
+      none: 14
+      int8: 8
+      awq: 4
+      gptq: 4
+    default_quantization: awq
+    tags: ["llm", "chat", "instruct", "production", "7b"]
+
+  - name: meta-llama/Llama-2-13b-hf
+    repo: meta-llama/Llama-2-13b-hf
+    description: "Meta's Llama 2 13B - larger model for more complex tasks"
+    parameters: "13B"
+    context_length: 4096
+    hardware_target: gpu
+    minimum_system_ram_gb: 0
+    sizes:
+      none: 27000000000      # ~26GB FP16
+      int8: 13600000000      # ~13GB INT8
+      awq: 6400000000        # ~6GB INT4
+      gptq: 6400000000       # ~6GB INT4
+    required_vram_gb:
+      none: 28
+      int8: 15
+      awq: 7
+      gptq: 7
+    default_quantization: awq
+    tags: ["llm", "chat", "instruct", "production", "13b"]
+
+  - name: mistralai/Mistral-7B-v0.1
+    repo: mistralai/Mistral-7B-v0.1
+    description: "Mistral 7B - efficient model with extended context (32k tokens)"
+    parameters: "7B"
+    context_length: 32768
+    hardware_target: gpu
+    minimum_system_ram_gb: 0
+    sizes:
+      none: 13858000000      # ~13GB FP16
+      int8: 7456000000       # ~7GB INT8
+      awq: 3200000000        # ~3GB INT4
+      gptq: 3200000000       # ~3GB INT4
+    required_vram_gb:
+      none: 14
+      int8: 8
+      awq: 4
+      gptq: 4
+    default_quantization: awq
+    tags: ["llm", "chat", "instruct", "extended-context", "7b"]
+
+# ============================================================================
+# CPU-OPTIMIZED MODELS (Small & Lightweight)
+# ============================================================================
+
+cpu_models:
+  - name: distilbert-base-uncased
+    repo: distilbert-base-uncased
+    description: "DistilBERT - lightweight BERT variant, excellent for embeddings and classification"
+    parameters: "66M"
+    context_length: 512
+    hardware_target: cpu
+    minimum_system_ram_gb: 0.5
+    sizes:
+      none: 250000000        # ~250MB FP32
+      int8: 100000000        # ~100MB INT8
+    required_vram_gb:
+      none: 0
+      int8: 0
+    default_quantization: int8
+    tags: ["cpu", "embeddings", "classification", "small", "fast"]
+
+  - name: TinyLlama/TinyLlama-1.1B
+    repo: TinyLlama/TinyLlama-1.1B
+    description: "TinyLlama - small but capable LLM, great for on-premise CPU deployment"
+    parameters: "1.1B"
+    context_length: 2048
+    hardware_target: cpu
+    minimum_system_ram_gb: 3
+    sizes:
+      none: 2200000000       # ~2GB FP16
+      int8: 1100000000       # ~1GB INT8
+    required_vram_gb:
+      none: 0
+      int8: 0
+    default_quantization: int8
+    tags: ["cpu", "llm", "chat", "small", "efficient"]
+
+  - name: microsoft/phi-2
+    repo: microsoft/phi-2
+    description: "Microsoft Phi-2 - state-of-the-art small language model"
+    parameters: "2.7B"
+    context_length: 2048
+    hardware_target: cpu
+    minimum_system_ram_gb: 6
+    sizes:
+      none: 5400000000       # ~5GB FP16
+      int8: 2700000000       # ~2GB INT8
+    required_vram_gb:
+      none: 0
+      int8: 0
+    default_quantization: int8
+    tags: ["cpu", "llm", "chat", "efficient", "powerful"]
+
+# ============================================================================
+# HYBRID MODELS (Work well on both GPU and CPU)
+# ============================================================================
+
+hybrid_models:
+  # (Future additions for models that work efficiently on both)
+
+# ============================================================================
+# CUSTOM MODELS (User-defined, add to ~/.sovereignstack/models.yaml)
+# ============================================================================
+# Users can extend this registry by creating:
+#   ~/.sovereignstack/models.yaml  (per-user models)
+#   ./models.local.yaml            (per-project models)
+#   /etc/sovereignstack/models.yaml (system-wide models)
+#
+# Format is identical to this file. Local models override bundled models.
