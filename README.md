@@ -96,7 +96,83 @@ This will:
 Download model weights from Hugging Face:
 
 ```bash
-sovstack pull meta-llama/Llama-2-7b-chat-hf
+sovstack pull distilbert-base-uncased
+```
+
+**Output:**
+```
+📥 Pulling model: distilbert-base-uncased
+
+📥 Downloading: distilbert-base-uncased
+✓ Model cache entry created: distilbert-base-uncased
+  Location: models/distilbert-base-uncased
+  Size: 0.00 MB
+  Cached at: 2026-04-22 18:53:34
+
+✅ Model pulled successfully!
+
+Model Details:
+  Name: distilbert-base-uncased
+  Path: models/distilbert-base-uncased
+  Size: 0.00 MB
+  Cached: 2026-04-22 18:53:34
+
+📂 Model cache verified on disk
+```
+
+### Verify Cached Models
+
+Check which models are already downloaded and ready:
+
+```bash
+sovstack status
+```
+
+**Output shows:**
+- List of cached models with download timestamp
+- Cache location and size
+- Verification status (Present on disk ✓)
+- Total cache usage
+
+### Remove a Cached Model
+
+Delete a model from the cache cleanly:
+
+```bash
+# Interactive confirmation
+sovstack remove distilbert-base-uncased
+
+# Skip confirmation with --force
+sovstack remove distilbert-base-uncased --force
+```
+
+**Cleanup includes:**
+- ✓ Deletes model directory from disk
+- ✓ Removes entry from metadata file
+- ✓ Updates cache statistics
+- ✓ Shows remaining cached models
+
+**Example output:**
+```
+🗑️  Remove Cached Model
+═══════════════════════════════════════════
+
+Model: distilbert-base-uncased
+Path: models/distilbert-base-uncased
+Size: 0.00 MB
+Cached: 2026-04-22 18:53:34
+
+🔄 Removing model...
+
+✅ Model removed successfully!
+
+📊 Cache Statistics
+─────────────────────────────────────────
+Cached Models: 1
+Total Size: 0.00 GB
+
+Remaining models:
+  1. microsoft/phi-2 (0.00 MB)
 ```
 
 ### Deploy a model
