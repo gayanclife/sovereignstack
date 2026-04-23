@@ -2,13 +2,7 @@
   "distilbert-base-uncased": {
     "name": "distilbert-base-uncased",
     "size": 134,
-    "downloaded": "2026-04-22T18:53:34.657862953+10:00",
+    "downloaded": "2026-04-23T09:07:28.152521988+10:00",
     "path": "models/distilbert-base-uncased"
-  },
-  "microsoft/phi-2": {
-    "name": "microsoft/phi-2",
-    "size": 118,
-    "downloaded": "2026-04-22T18:53:46.927477376+10:00",
-    "path": "models/microsoft/phi-2"
   }
 }

@@ -10,6 +10,31 @@ Create a unified, open-source CLI and orchestration engine that allows developer
 **Target User:**  
 DevOps engineers, System Administrators, and AI practitioners who need to host models like Llama 3 or Mistral internally for cost, privacy, or regulatory compliance reasons.
 
+## Current Status (MVP Phase 1)
+
+**Completion:** ~80% of Phase 1 features implemented
+
+### ✅ Completed Features
+- Hardware detection (GPU/CPU/RAM/CUDA)
+- Hardware-aware model selection (CPU-only and GPU support)
+- Dynamic model registry with YAML configuration
+- Model caching system with persistent metadata
+- Reverse proxy gateway with authentication and audit logging
+- Rate limiting and request tracing
+- 7 CLI commands: init, pull, status, remove, deploy, gateway, + help/completion
+
+### 📋 Remaining Phase 1 Tasks
+- OnPrem provider implementation (Docker/K3s orchestration)
+- Model deployment and inference server management
+- Integration between gateway and deployment system
+
+### 🎯 Phase 1 Delivery Includes
+- Production-ready CLI tool for on-premise deployments
+- Hardware-aware model selection and caching
+- Secure API gateway with audit logging for compliance
+- Community-friendly model registry (extensible via YAML)
+- Complete documentation and examples
+
 ## Architecture: Provider-Based Design
 
 SovereignStack uses a **Provider-based architecture** where the core logic is decoupled from the underlying infrastructure. The "Brain" of the software doesn't know about hardware; it only knows how to talk to a "Provider" interface.
@@ -107,16 +132,22 @@ This design allows seamless switching between on-prem, AWS, Azure, and GCP imple
 sovstack init [--provider onprem]
 
 # Pull a model from Hugging Face
-sovstack pull [model-name] [--cache-dir /path]
+sovstack pull [model-name] [--cache-dir ./models]
 
-# Start the inference cluster
-sovstack up [--model model-name] [--quantization awq]
+# View cached models and cache statistics
+sovstack status [--cache-dir ./models]
+
+# Remove a cached model
+sovstack remove [model-name] [--cache-dir ./models] [--force]
+
+# Deploy a model to inference server
+sovstack deploy [model-name]
+
+# Start the reverse proxy gateway with authentication and audit logging
+sovstack gateway [--backend http://localhost:8000] [--port 8001] [--rate-limit 100]
 
 # Check cluster status
 sovstack status
-
-# Stop all services
-sovstack down
 ```
 
 ## Hardware-Aware Model Selection (MVP Feature)
@@ -164,6 +195,85 @@ This design allows:
 - **Flexibility:** Different models per system/user/project
 - **Fallback Safety:** Hardcoded defaults used if YAML files unavailable
 - **Open-Source Ready:** Easy for the community to extend with custom models
+
+## Model Caching System
+
+SovereignStack includes an intelligent model caching system for efficient model management:
+
+### Core Features
+- **Persistent Metadata:** All cached models tracked in `.metadata.json`
+- **Verification:** Disk verification with status checks (Present on disk ✓)
+- **Download Tracking:** Timestamp and path information for each model
+- **Statistics:** Real-time cache size calculations and model counts
+- **Clean Removal:** Safe deletion with metadata cleanup (no orphaned files)
+
+### CLI Commands for Model Management
+
+**Pull Model:**
+```bash
+sovstack pull [model-name] [--cache-dir ./models]
+```
+- Downloads model and creates cache entry
+- Persistent proof of success (metadata file)
+- Verification on disk after download
+
+**View Cached Models:**
+```bash
+sovstack status [--cache-dir ./models]
+```
+- List all cached models with details
+- Display: name, size, cache path, timestamp
+- Show verification status for each model
+- Aggregate cache statistics
+
+**Remove Model:**
+```bash
+sovstack remove [model-name] [--cache-dir ./models] [--force]
+```
+- Interactive confirmation (or --force to skip)
+- Deletes model directory completely
+- Updates metadata file
+- Recalculates cache statistics
+
+### Cache Implementation
+
+**CacheManager (`core/model/cache.go`):**
+- Handles all cache operations (add, remove, verify, list)
+- Persistent metadata storage (JSON format)
+- Thread-safe operations with sync.RWMutex
+- Automatic directory size calculation
+- Model verification and validation
+
+**Metadata File Format:**
+```json
+{
+  "model-name": {
+    "name": "model-name",
+    "size": 1024000,
+    "downloaded": "2026-04-23T09:05:07Z",
+    "path": "models/model-name"
+  }
+}
+```
+
+### Workflow Example
+
+```bash
+# 1. Pull a model
+./sovstack pull distilbert-base-uncased
+# Output: ✅ Model pulled successfully! + metadata
+
+# 2. Verify it's cached
+./sovstack status
+# Output: Shows model in list with ✓ Present on disk
+
+# 3. Use in deployment
+./sovstack deploy distilbert-base-uncased
+
+# 4. Remove when done
+./sovstack remove distilbert-base-uncased --force
+# Output: ✅ Model removed successfully! + updated stats
+```
 
 ## Gateway & API Security
 
@@ -214,7 +324,18 @@ curl http://localhost:8001/api/audit/stats
 - [x] Task 3: Add CPU-support with hardware-aware model filtering
 - [x] Task 4: Implement model management and quantization detection
 - [x] Task 5: Create CLI commands (init, pull, deploy) with hardware validation
-- [x] Task 6: System RAM detection and model compatibility checking
+  - `sovstack init` - Hardware pre-flight checks and model discovery
+  - `sovstack pull [model]` - Download models with persistent metadata
+  - `sovstack status` - View cached models and cache statistics  
+  - `sovstack remove [model]` - Clean model deletion with confirmation
+  - `sovstack deploy [model]` - Deploy with hardware compatibility validation
+  - `sovstack gateway` - Start reverse proxy with auth and audit logging
+- [x] Task 6: Model caching system with verification
+  - Persistent metadata file (`.metadata.json`) tracking all cached models
+  - Model verification on disk with status checks
+  - Cache statistics (total models, total size)
+  - Safe removal with metadata cleanup
+  - Model download timestamp and path tracking
 - [x] Task 7: Dynamic model loading with YAML configuration
   - YAML-based model registry (`models.yaml`)
   - Multiple config source support (project/system/user/bundled)
