@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gayanclife/sovereignstack/internal/config"
 	"github.com/gayanclife/sovereignstack/internal/downloader"
 )
 
@@ -25,19 +26,39 @@ type CacheManager struct {
 	metadataFile string
 	mu           sync.RWMutex
 	metadata     map[string]*CacheMetadata
+	configMgr    *config.Manager
+	auditor      *config.AuditLogger
 }
 
 // NewCacheManager creates a new cache manager
 func NewCacheManager(cacheDir string) (*CacheManager, error) {
+	// Load config
+	configMgr, err := config.NewManager()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize config: %w", err)
+	}
+
+	// Use configured cache dir if cacheDir is empty
+	if cacheDir == "" {
+		cacheDir = configMgr.GetCacheDir()
+	} else {
+		// Update config with provided cache dir
+		_ = configMgr.SetCacheDir(cacheDir)
+	}
+
 	// Ensure cache directory exists
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
+	auditor := config.NewAuditLogger(configMgr.GetConfigDir())
+
 	cm := &CacheManager{
 		cacheDir:     cacheDir,
 		metadataFile: filepath.Join(cacheDir, ".metadata.json"),
 		metadata:     make(map[string]*CacheMetadata),
+		configMgr:    configMgr,
+		auditor:      auditor,
 	}
 
 	// Load existing metadata
@@ -147,7 +168,7 @@ func (cm *CacheManager) DownloadModel(modelName string) error {
 
 // downloadFromHuggingFace downloads model files from Hugging Face Hub
 func (cm *CacheManager) downloadFromHuggingFace(modelName, modelDir string) error {
-	hfDownloader := downloader.NewHFDownloader(cm.cacheDir)
+	hfDownloader := downloader.NewHFDownloader(cm.cacheDir, cm.auditor)
 	if err := hfDownloader.DownloadModel(modelName, modelDir); err != nil {
 		return err
 	}

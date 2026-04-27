@@ -16,7 +16,6 @@ limitations under the License.
 package downloader
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +23,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/gayanclife/sovereignstack/internal/config"
 )
 
 // HFDownloader handles Hugging Face model downloads
@@ -31,29 +32,21 @@ type HFDownloader struct {
 	token      string
 	cacheDir   string
 	httpClient *http.Client
+	auditor    *config.AuditLogger
 }
 
-// FileInfo represents a model file from HF API
-type FileInfo struct {
-	Filename string `json:"rfilename"`
-	Size     int64  `json:"size"`
-	Blob      struct {
-		SHA256 string `json:"sha256"`
-	} `json:"blob"`
-}
-
-// HFModelResponse is the HF API response for model files
-type HFModelResponse struct {
-	Siblings []FileInfo `json:"siblings"`
-}
 
 // NewHFDownloader creates a new Hugging Face downloader
-func NewHFDownloader(cacheDir string) *HFDownloader {
+func NewHFDownloader(cacheDir string, auditor *config.AuditLogger) *HFDownloader {
 	token := os.Getenv("HF_TOKEN")
+	if auditor != nil && token != "" {
+		auditor.LogTokenAccess("environment_variable")
+	}
 
 	return &HFDownloader{
-		token:    token,
-		cacheDir: cacheDir,
+		token:      token,
+		cacheDir:   cacheDir,
+		auditor:    auditor,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -106,6 +99,9 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 
 		if err := d.downloadFile(url, destPath, resp.ContentLength, modelID); err != nil {
 			fmt.Printf("   ⚠ Failed to download %s: %v\n", filename, err)
+			if d.auditor != nil {
+				d.auditor.LogModelDownload(modelID, "failed", filename)
+			}
 			continue
 		}
 
@@ -113,47 +109,17 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 	}
 
 	if modelFileCount == 0 {
+		if d.auditor != nil {
+			d.auditor.LogModelDownload(modelID, "failed", "no_files_found")
+		}
 		return fmt.Errorf("no model files found for %s", modelID)
 	}
 
 	fmt.Printf("   ✓ Download complete: %d files\n", modelFileCount)
+	if d.auditor != nil {
+		d.auditor.LogModelDownload(modelID, "success", fmt.Sprintf("%d files", modelFileCount))
+	}
 	return nil
-}
-
-// fetchFileList fetches the list of files for a model from HF API
-func (d *HFDownloader) fetchFileList(modelID string) ([]FileInfo, error) {
-	url := fmt.Sprintf("https://huggingface.co/api/models/%s", modelID)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add auth header if token available
-	if d.token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.token))
-	}
-
-	resp, err := d.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 401 {
-		return nil, fmt.Errorf("unauthorized - this model requires a Hugging Face token. Set HF_TOKEN=your_token")
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned %d: %s", resp.StatusCode, resp.Status)
-	}
-
-	var modelResp HFModelResponse
-	if err := json.NewDecoder(resp.Body).Decode(&modelResp); err != nil {
-		return nil, fmt.Errorf("failed to parse response: %w", err)
-	}
-
-	return modelResp.Siblings, nil
 }
 
 // downloadFile downloads a single file with progress and resume support
