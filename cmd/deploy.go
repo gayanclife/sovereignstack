@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/gayanclife/sovereignstack/core"
@@ -16,14 +17,19 @@ var deployCmd = &cobra.Command{
 The model must be pulled first using 'sovstack pull'. This command
 will start the Docker container with optimized GPU parameters.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		modelName := args[0]
+		port, _ := cmd.Flags().GetInt("port")
+		quantStr, _ := cmd.Flags().GetString("quantization")
+		rebuild, _ := cmd.Flags().GetBool("rebuild")
+
 		fmt.Printf("Deploying model: %s\n", modelName)
 
 		// Initialize engine to detect hardware
 		engineConfig := engine.EngineConfig{
 			ModelCacheDir: "./models",
-			Port:          8000,
+			Port:          port,
+			RebuildImage:  rebuild,
 		}
 
 		er, err := engine.NewEngineRoom(engineConfig)
@@ -50,14 +56,14 @@ will start the Docker container with optimized GPU parameters.`,
 					fmt.Printf("  • %s - %s\n", m.Name, m.Description)
 				}
 			}
-			return
+			return nil
 		}
 
 		// Check if model is suitable for hardware
 		suitable, _ := er.GetSuitableModels()
 
 		// Check if requested model is available
-		modelMetadata := er.GetSystemInfo()
+		sysInfo := er.GetSystemInfo()
 		isSuitable := false
 		for _, m := range suitable {
 			if m.Name == modelName {
@@ -70,7 +76,7 @@ will start the Docker container with optimized GPU parameters.`,
 			fmt.Printf("✗ Model '%s' is not compatible with detected hardware\n\n", modelName)
 
 			// Check if it's because GPU is not available
-			if len(modelMetadata.GPUs) == 0 {
+			if len(sysInfo.GPUs) == 0 {
 				fmt.Println("No NVIDIA GPUs detected. This system can run CPU-optimized models only:")
 				for _, m := range suitable {
 					fmt.Printf("  • %s (requires %.1f GB RAM)\n", m.Name, float64(m.MinimumSystemRAM)/(1024*1024*1024))
@@ -81,12 +87,53 @@ will start the Docker container with optimized GPU parameters.`,
 					fmt.Printf("  • %s (requires %.1f GB VRAM)\n", m.Name, float64(m.RequiredVRAM["none"])/(1024*1024*1024))
 				}
 			}
-			return
+			return nil
 		}
 
-		fmt.Printf("✓ Model %s is compatible with your hardware\n", modelName)
-		fmt.Println("Deployment initiated...")
-		fmt.Println("API endpoint available at: http://localhost:8000/v1/chat/completions")
+		fmt.Printf("✓ Model %s is compatible with your hardware\n\n", modelName)
+
+		// Plan the deployment
+		ctx := context.Background()
+		plan, err := er.PlanDeployment(ctx, modelName)
+		if err != nil {
+			fmt.Printf("✗ Cannot plan deployment: %v\n", err)
+			return err
+		}
+
+		fmt.Println("📋 Deployment Plan:")
+		fmt.Printf("  Model:           %s\n", plan.ModelName)
+		fmt.Printf("  Quantization:    %s\n", plan.Quantization)
+		fmt.Printf("  Required VRAM:   %.1f GB\n", float64(plan.RequiredVRAM)/(1024*1024*1024))
+		fmt.Printf("  Available VRAM:  %.1f GB\n", float64(plan.AvailableVRAM)/(1024*1024*1024))
+		if plan.ContextLength > 0 {
+			fmt.Printf("  Context Length:  %d tokens\n", plan.ContextLength)
+		}
+		if plan.Notes != "" {
+			fmt.Printf("  Notes:           %s\n", plan.Notes)
+		}
+		fmt.Println()
+
+		fmt.Println("🚀 Starting deployment...")
+
+		// Parse quantization override if provided
+		var optionalQuantization *core.QuantizationType
+		if quantStr != "auto" {
+			quantType := core.QuantizationType(quantStr)
+			optionalQuantization = &quantType
+		}
+
+		// Deploy the model
+		if err := er.Deploy(ctx, modelName, optionalQuantization); err != nil {
+			fmt.Printf("✗ Deployment failed: %v\n", err)
+			return err
+		}
+
+		fmt.Println()
+		fmt.Printf("✅ Model deployed successfully!\n")
+		fmt.Printf("  API endpoint: http://localhost:%d/v1/chat/completions\n", port)
+		fmt.Println("  Run 'sovstack gateway' to start the secure proxy")
+
+		return nil
 	},
 }
 
@@ -120,4 +167,7 @@ func getSuitableModelsInfo() ([]*core.ModelMetadata, []*core.ModelMetadata) {
 
 func init() {
 	rootCmd.AddCommand(deployCmd)
+	deployCmd.Flags().IntP("port", "p", 8000, "Port to expose vLLM on")
+	deployCmd.Flags().StringP("quantization", "q", "auto", "Quantization type to use (auto/none/awq/gptq/int8)")
+	deployCmd.Flags().BoolP("rebuild", "r", false, "Force rebuild of inference engine Docker image")
 }

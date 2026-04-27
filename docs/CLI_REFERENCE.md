@@ -337,24 +337,42 @@ sovstack init
 
 ## Deployment Commands
 
-### `sovstack up <model-name>`
+### `sovstack deploy <model-name>`
 
 Deploy a model and start the inference server.
 
+Validates hardware compatibility, plans the deployment (quantization, VRAM), and starts the vLLM container.
+
 **Syntax:**
 ```bash
-sovstack up <model-name> [flags]
+sovstack deploy <model-name> [flags]
 ```
+
+**Flags:**
+- `--port, -p INT` - Port to expose inference server on (default: 8000)
+- `--quantization, -q STRING` - Override quantization method (none/awq/gptq/int8/auto, default: auto)
 
 **Examples:**
 
 ```bash
-# Deploy a model
-sovstack up gpt2
+# Deploy with auto-selected quantization
+sovstack deploy gpt2
+
+# Deploy on custom port
+sovstack deploy gpt2 --port 9000
+
+# Deploy with specific quantization
+sovstack deploy meta-llama/Llama-2-7b-hf --quantization awq
 
 # Verify first, then deploy
-sovstack verify gpt2 && sovstack up gpt2
+sovstack verify gpt2 && sovstack deploy gpt2
 ```
+
+**Output includes:**
+- ✓ Hardware compatibility check
+- 📋 Deployment plan showing model, quantization, VRAM requirements, context length
+- 🚀 Deployment progress
+- ✅ Success message with API endpoint
 
 **Prerequisites:**
 - Model must be cached (run `sovstack pull <model>` first)
@@ -408,7 +426,7 @@ sovstack pull gpt2
 sovstack verify gpt2
 
 # 5. Deploy
-sovstack up gpt2
+sovstack deploy gpt2
 
 # 6. Use the API
 curl http://localhost:8000/v1/chat/completions \

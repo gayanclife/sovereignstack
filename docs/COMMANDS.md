@@ -166,16 +166,16 @@ Models are cached in:
 
 ---
 
-## sovstack up
+## sovstack deploy
 
 Deploy a model to the vLLM inference server.
 
-Starts a Docker container running the model and exposes an OpenAI-compatible API.
+Validates hardware compatibility, creates a deployment plan, and starts a Docker container running the model with an OpenAI-compatible API.
 
 ### Usage
 
 ```bash
-sovstack up <model-name> [flags]
+sovstack deploy <model-name> [flags]
 ```
 
 ### Arguments
@@ -188,45 +188,49 @@ sovstack up <model-name> [flags]
 
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--port` | int | 8000 | Port to expose inference server on |
-| `--quantization` | string | auto | Override quantization (none/awq/gptq/int8/auto) |
-| `--gpu` | string | all | GPU indices to use (e.g., `0,1` for GPUs 0 and 1) |
+| `--port, -p` | int | 8000 | Port to expose inference server on |
+| `--quantization, -q` | string | auto | Override quantization (none/awq/gptq/int8/auto) |
 | `--help, -h` | - | - | Show help message |
 
 ### Examples
 
 **Deploy with auto-selected quantization:**
 ```bash
-./sovstack up mistralai/Mistral-7B-Instruct-v0.3
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3
 ```
 
 **Deploy on specific port:**
 ```bash
-./sovstack up mistralai/Mistral-7B-Instruct-v0.3 --port 9000
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3 --port 9000
 ```
 
 **Deploy without quantization (if enough VRAM):**
 ```bash
-./sovstack up meta-llama/Llama-3.1-8B-Instruct --quantization none
+./sovstack deploy meta-llama/Llama-3.1-8B-Instruct --quantization none
 ```
 
-**Deploy on specific GPU:**
+**Deploy with AWQ quantization:**
 ```bash
-./sovstack up mistralai/Mistral-7B-Instruct-v0.3 --gpu 0
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3 --quantization awq
 ```
 
 ### Output
 
 ```
-Deployment Plan:
-  Model:         mistralai/Mistral-7B-Instruct-v0.3
-  Quantization:  awq
-  Required VRAM: 5.0 GB
-  Available VRAM: 23.5 GB
-  Notes: Excellent fit for GPU
+Deploying model: mistralai/Mistral-7B-Instruct-v0.3
+✓ Model mistralai/Mistral-7B-Instruct-v0.3 is compatible with your hardware
 
-Starting deployment...
-✓ Model deployed successfully
+📋 Deployment Plan:
+  Model:           mistralai/Mistral-7B-Instruct-v0.3
+  Quantization:    awq
+  Required VRAM:   5.0 GB
+  Available VRAM:  23.5 GB
+  Context Length:  32768 tokens
+  Notes:           Excellent fit for GPU
+
+🚀 Starting deployment...
+
+✅ Model deployed successfully!
   API endpoint: http://localhost:8000/v1/chat/completions
   Run 'sovstack gateway' to start the secure proxy
 ```

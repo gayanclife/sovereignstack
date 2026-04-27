@@ -184,7 +184,7 @@ Total Size: 1.02 GB
 
 ✅ READY: Model is complete and ready to deploy
 
-Next step: sovstack up gpt2
+Next step: sovstack deploy gpt2
 ```
 
 ### Remove a Cached Model

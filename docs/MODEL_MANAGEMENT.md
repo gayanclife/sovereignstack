@@ -178,7 +178,7 @@ Remove a model:
 ./sovstack pull mistralai/Mistral-7B-Instruct-v0.3
 
 # Or deploy with aggressive quantization
-./sovstack up mistralai/Mistral-7B-Instruct-v0.3 --quantization int8
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3 --quantization int8
 ```
 
 ### Gated Model Access

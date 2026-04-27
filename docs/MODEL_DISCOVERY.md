@@ -116,7 +116,7 @@ You want to test without a GPU:
 # Shows TinyLlama, Phi-3 Mini, etc.
 
 ./sovstack pull TinyLlama/TinyLlama-1.1B-Chat-v1.0
-./sovstack up TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./sovstack deploy TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
 ### Find What Your GPU Can Run
@@ -127,7 +127,7 @@ You want to test without a GPU:
 # Shows all models that fit
 
 ./sovstack pull mistralai/Mistral-7B-Instruct-v0.3
-./sovstack up mistralai/Mistral-7B-Instruct-v0.3
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3
 ```
 
 ### Use Custom Model Registry

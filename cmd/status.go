@@ -61,7 +61,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Get started:\n")
 		fmt.Printf("  sovstack pull gpt2           - Download GPT-2 (small model)\n")
 		fmt.Printf("  sovstack status              - Show this status\n")
-		fmt.Printf("  sovstack up gpt2             - Deploy the model\n")
+		fmt.Printf("  sovstack deploy gpt2             - Deploy the model\n")
 		return nil
 	}
 
@@ -191,7 +191,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\n")
 	if result.ReadyToDeploy {
 		fmt.Printf("✅ READY: Model is complete and ready to deploy\n")
-		fmt.Printf("\nNext step: sovstack up %s\n", modelName)
+		fmt.Printf("\nNext step: sovstack deploy %s\n", modelName)
 	} else {
 		fmt.Printf("❌ NOT READY: Model verification failed\n")
 		if result.Status == "not_cached" {

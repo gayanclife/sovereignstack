@@ -15,8 +15,8 @@ import (
 type EngineRoom struct {
 	hardware     *hardware.SystemHardware
 	modelManager *model.Manager
-	vllmOrch     *docker.VLLMOrchestrator
-	runningModel *core.ModelInstance
+	engines      map[string]docker.InferenceEngine // one engine per running model
+	runningModels map[string]*core.ModelInstance    // models keyed by model name
 	quantCalc    *model.QuantizationCalculator
 	config       EngineConfig
 }
@@ -27,6 +27,7 @@ type EngineConfig struct {
 	Port          int
 	VRAMLimit     int64 // Optional: limit VRAM usage (0 = use all)
 	GPUIndices    []int // GPU indices to use (nil = all)
+	RebuildImage  bool  // Force rebuild of Docker image
 }
 
 // DeploymentPlan describes how a model will be deployed
@@ -64,7 +65,7 @@ func NewEngineRoom(config EngineConfig) (*EngineRoom, error) {
 	return &EngineRoom{
 		hardware:     hw,
 		modelManager: modelMgr,
-		vllmOrch:     docker.NewVLLMOrchestrator(),
+		engine:       docker.NewInferenceEngine(len(hw.GPUs) > 0),
 		quantCalc:    model.NewQuantizationCalculator(availableVRAM),
 		config:       config,
 	}, nil
@@ -127,6 +128,7 @@ func (er *EngineRoom) Deploy(ctx context.Context, modelName string, optionalQuan
 		return fmt.Errorf("unknown model: %s", modelName)
 	}
 
+
 	// Determine quantization
 	quant := optionalQuantization
 	if quant == nil {
@@ -143,8 +145,8 @@ func (er *EngineRoom) Deploy(ctx context.Context, modelName string, optionalQuan
 		return err
 	}
 
-	// Create vLLM config
-	vllmCfg := docker.VLLMConfig{
+	// Create inference engine config
+	inferenceCfg := docker.InferenceConfig{
 		ModelPath:            modelPath,
 		ModelName:            modelName,
 		Quantization:         *quant,
@@ -153,22 +155,23 @@ func (er *EngineRoom) Deploy(ctx context.Context, modelName string, optionalQuan
 		GPUMemoryUtilization: 0.9,
 		TensorParallelSize:   len(er.hardware.GPUs),
 		Port:                 er.config.Port,
+		RebuildImage:         er.config.RebuildImage,
 	}
 
-	// Start vLLM container
-	containerID, err := er.vllmOrch.Start(ctx, vllmCfg)
+	// Start inference engine container
+	containerID, err := er.engine.Start(ctx, inferenceCfg)
 	if err != nil {
-		return fmt.Errorf("failed to start vLLM: %w", err)
+		return fmt.Errorf("failed to start inference engine: %w", err)
 	}
 
 	// Wait for health check
 	maxRetries := 30
 	for i := 0; i < maxRetries; i++ {
-		if err := er.vllmOrch.HealthCheck(ctx, er.config.Port); err == nil {
+		if err := er.engine.HealthCheck(ctx, er.config.Port); err == nil {
 			break
 		}
 		if i == maxRetries-1 {
-			return fmt.Errorf("vLLM container failed health check after 30s")
+			return fmt.Errorf("inference engine container failed health check after 30s")
 		}
 		select {
 		case <-ctx.Done():
@@ -197,11 +200,11 @@ func (er *EngineRoom) Stop(ctx context.Context) error {
 		return fmt.Errorf("no model running")
 	}
 
-	if err := er.vllmOrch.Stop(ctx); err != nil {
+	if err := er.engine.Stop(ctx); err != nil {
 		return err
 	}
 
-	_ = er.vllmOrch.Remove(ctx) // Best effort cleanup
+	_ = er.engine.Remove(ctx) // Best effort cleanup
 	er.runningModel = nil
 
 	return nil
@@ -218,7 +221,7 @@ func (er *EngineRoom) Status(ctx context.Context) *EngineStatus {
 	}
 
 	if er.runningModel != nil {
-		running, _ := er.vllmOrch.IsRunning(ctx)
+		running, _ := er.engine.IsRunning(ctx)
 		status.ContainerRunning = running
 	}
 

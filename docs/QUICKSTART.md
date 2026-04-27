@@ -102,7 +102,7 @@ For CPU, use tiny models that run without GPU:
 ### Step 4a: Deploy and Test
 
 ```bash
-./sovstack up TinyLlama/TinyLlama-1.1B-Chat-v1.0
+./sovstack deploy TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
 Test it:
@@ -148,7 +148,7 @@ The tool automatically:
 Start the inference server with a single command:
 
 ```bash
-./sovstack up mistralai/Mistral-7B-Instruct-v0.3
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3
 ```
 
 Output:
@@ -257,7 +257,7 @@ Output:
 
 ## Next Steps
 
-- **Deploy another model:** `./sovstack pull <model>` and `./sovstack up <model>`
+- **Deploy another model:** `./sovstack pull <model>` and `./sovstack deploy <model>`
 - **Manage API keys:** See [Command Reference](./COMMANDS.md#keys)
 - **Configure gateway:** See [Gateway & Security Setup](./GATEWAY_SECURITY.md) *(Coming Soon)*
 - **Troubleshoot:** Check logs with `docker logs vllm-<model-name>`
@@ -289,7 +289,7 @@ watch -n 1 nvidia-smi
 
 If GPU usage is low, the model quantization might be too aggressive. Try deploying without quantization (though it may require more VRAM):
 ```bash
-./sovstack up mistralai/Mistral-7B-Instruct-v0.3 --quantization none
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3 --quantization none
 ```
 
 ## What's Next?
