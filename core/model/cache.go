@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/gayanclife/sovereignstack/internal/downloader"
 )
 
 // CacheMetadata stores information about downloaded models
@@ -145,25 +147,13 @@ func (cm *CacheManager) DownloadModel(modelName string) error {
 	return nil
 }
 
-// downloadFromHuggingFace attempts to download from Hugging Face Hub
+// downloadFromHuggingFace downloads model files from Hugging Face Hub
 func (cm *CacheManager) downloadFromHuggingFace(modelName, modelDir string) error {
-	// This would require huggingface_hub or similar
-	// For MVP, we just create the directory structure
-	// In production, you'd use:
-	// - huggingface_hub Python package
-	// - Go bindings to huggingface API
-	// - Or direct download from CDN
-
-	// Create a placeholder metadata file for the model
-	modelMetaFile := filepath.Join(modelDir, "model.json")
-	meta := map[string]interface{}{
-		"name":        modelName,
-		"description": fmt.Sprintf("Model: %s", modelName),
-		"cached_at":   time.Now().Format(time.RFC3339),
+	hfDownloader := downloader.NewHFDownloader(cm.cacheDir)
+	if err := hfDownloader.DownloadModel(modelName, modelDir); err != nil {
+		return err
 	}
-
-	data, _ := json.MarshalIndent(meta, "", "  ")
-	return os.WriteFile(modelMetaFile, data, 0644)
+	return nil
 }
 
 // getDirSize returns total size of directory in bytes

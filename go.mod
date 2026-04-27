@@ -3,6 +3,7 @@ module github.com/gayanclife/sovereignstack
 go 1.24.4
 
 require (
+	github.com/schollz/progressbar/v3 v3.14.4
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )
