@@ -67,46 +67,56 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Fetch file list
-	files, err := d.fetchFileList(modelID)
-	if err != nil {
-		return fmt.Errorf("failed to fetch file list: %w", err)
+	// Try common model file names
+	commonFiles := []string{
+		"model.safetensors",
+		"pytorch_model.bin",
+		"model.bin",
+		"adapter_model.bin",
+		"model.gguf",
+		"model.pt",
 	}
 
-	if len(files) == 0 {
-		return fmt.Errorf("no files found for model %s", modelID)
-	}
+	fmt.Printf("   Checking for model files in %s...\n", modelID)
 
-	fmt.Printf("Found %d files to download\n", len(files))
-
-	// Download each model file
 	modelFileCount := 0
-	for _, file := range files {
-		// Skip non-model files
-		if !isModelFile(file.Filename) {
-			fmt.Printf("  ⊘ Skipping: %s\n", file.Filename)
+	for _, filename := range commonFiles {
+		url := fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", modelID, filename)
+		destPath := filepath.Join(destDir, filename)
+
+		// Check if file exists by making HEAD request
+		req, err := http.NewRequest("HEAD", url, nil)
+		if err != nil {
 			continue
 		}
 
+		if d.token != "" {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.token))
+		}
+
+		resp, err := d.httpClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			continue
+		}
+		resp.Body.Close()
+
+		// File exists, download it
 		modelFileCount++
-		url := fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", modelID, file.Filename)
-		destPath := filepath.Join(destDir, file.Filename)
+		fmt.Printf("   %d. %s\n", modelFileCount, filename)
 
-		fmt.Printf("\n%d. %s\n", modelFileCount, file.Filename)
-		fmt.Printf("   Size: %.2f GB\n", float64(file.Size)/(1024*1024*1024))
-
-		if err := d.downloadFile(url, destPath, file.Size, modelID); err != nil {
-			return fmt.Errorf("failed to download %s: %w", file.Filename, err)
+		if err := d.downloadFile(url, destPath, resp.ContentLength, modelID); err != nil {
+			fmt.Printf("   ⚠ Failed to download %s: %v\n", filename, err)
+			continue
 		}
 
 		fmt.Printf("   ✓ Downloaded\n")
 	}
 
 	if modelFileCount == 0 {
-		return fmt.Errorf("no model files found (only metadata files)")
+		return fmt.Errorf("no model files found for %s", modelID)
 	}
 
-	fmt.Printf("\n✓ Download complete: %d files\n", modelFileCount)
+	fmt.Printf("   ✓ Download complete: %d files\n", modelFileCount)
 	return nil
 }
 

@@ -108,12 +108,10 @@ func (cm *CacheManager) DownloadModel(modelName string) error {
 		return fmt.Errorf("failed to create model directory: %w", err)
 	}
 
-	// Try to clone using git-lfs first (for actual models)
+	// Try to download from Hugging Face
 	if err := cm.downloadFromHuggingFace(modelName, modelDir); err != nil {
-		// For this MVP, we'll create a metadata file even if we can't download
-		// In production, this would actually download from HF Hub
-		fmt.Printf("⚠ Note: Full model download requires internet access to Hugging Face\n")
-		fmt.Printf("  Creating cache entry for: %s\n", modelName)
+		fmt.Printf("⚠ Download error: %v\n", err)
+		fmt.Printf("  Creating cache entry anyway\n")
 	}
 
 	// Calculate directory size
