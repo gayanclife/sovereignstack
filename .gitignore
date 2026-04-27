@@ -27,10 +27,22 @@ venv/
 *$py.class
 
 # === AI/ML Data (The Heavy Stuff) ===
-models/              # Large Language Model weights
-datasets/            # Training/Fine-tuning data
-.cache/huggingface/  # HF cache directory
-.cache/vllm/         # vLLM cache directory
+# Do NOT commit downloaded models - they are large (5-40GB+) and can be re-downloaded
+# Users can pull models with: sovstack pull <model-name>
+#
+# DO commit: models.yaml (bundled model registry)
+# DO NOT commit: Downloaded model weights in models/ directory
+#
+models/                          # Downloaded model weights from Hugging Face (IGNORE)
+models.local.yaml                # Local model overrides (user-specific, IGNORE)
+datasets/                        # Training/Fine-tuning data
+.cache/                          # All cache directories
+.cache/huggingface/              # HF cache directory
+.cache/vllm/                     # vLLM cache directory
+.sovereignstack/                 # User config: cache, logs, tokens (IGNORE)
+.sovereignstack/models/          # Cached models (user-local, IGNORE)
+.sovereignstack/logs/            # User audit logs (IGNORE)
+.sovereignstack/config.json      # User configuration (tokens, paths, IGNORE)
 
 # === Infrastructure & DevOps ===
 # Docker
