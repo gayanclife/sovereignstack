@@ -91,48 +91,101 @@ This will:
     Min RAM: 6.0 GB
 ```
 
+### Configure Storage and Logging
+
+Before downloading large models, configure where files are stored and logged:
+
+```bash
+# Set custom cache directory (for large disk)
+sovstack config set cache-dir /mnt/large-disk/models
+
+# Set custom log directory (for audit trails)
+sovstack config set log-dir /var/log/sovereignstack
+
+# View all configuration
+sovstack config list
+```
+
+**Configuration options:**
+- `cache-dir` - Where model files are stored (default: `~/.sovereignstack/models`)
+- `log-dir` - Where audit logs are written (default: `/var/log/sovereignstack` on Linux, with fallback)
+- `hf-token` - Hugging Face API token (encrypted, for gated models)
+
+**Environment variable overrides** (useful for CI/CD):
+```bash
+SOVEREIGNSTACK_CACHE_DIR=/tmp/cache SOVEREIGNSTACK_LOG_DIR=/tmp/logs sovstack pull gpt2
+```
+
 ### Pull a model
 
 Download model weights from Hugging Face:
 
 ```bash
-sovstack pull distilbert-base-uncased
+sovstack pull gpt2
 ```
 
 **Output:**
 ```
-📥 Pulling model: distilbert-base-uncased
+📥 Pulling model: gpt2
 
-📥 Downloading: distilbert-base-uncased
-✓ Model cache entry created: distilbert-base-uncased
-  Location: models/distilbert-base-uncased
-  Size: 0.00 MB
-  Cached at: 2026-04-22 18:53:34
+📥 Downloading: gpt2
+   Checking for model files in gpt2...
+   1. model.safetensors
+   ✓ Downloaded
+   2. pytorch_model.bin
+   ✓ Downloaded
+   ✓ Download complete: 2 files
+✓ Model cache entry created: gpt2
+  Location: models/gpt2
+  Size: 1045.44 MB
+  Cached at: 2026-04-27 20:05:05
 
 ✅ Model pulled successfully!
-
-Model Details:
-  Name: distilbert-base-uncased
-  Path: models/distilbert-base-uncased
-  Size: 0.00 MB
-  Cached: 2026-04-22 18:53:34
-
-📂 Model cache verified on disk
 ```
 
-### Verify Cached Models
+### Verify Models Are Ready
 
-Check which models are already downloaded and ready:
+Check which models are downloaded and ready to deploy:
 
 ```bash
+# Show all cached models with verification status
 sovstack status
+
+# Show detailed file listing
+sovstack status --detailed
+
+# Verify a specific model
+sovstack verify gpt2
 ```
 
-**Output shows:**
-- List of cached models with download timestamp
-- Cache location and size
-- Verification status (Present on disk ✓)
-- Total cache usage
+**Status command output:**
+```
+💾 Cached Models (1)
+1. gpt2 [✓ Ready to deploy]
+   Size: 1045.44 MB (2 files)
+   Location: models/gpt2
+   Cached: 2026-04-27 20:05:05
+
+✅ Status: Ready
+```
+
+**Verify command output:**
+```
+📋 Verification Report: gpt2
+
+Status: ready
+Ready to Deploy: true
+File Count: 2
+Total Size: 1.02 GB
+
+📁 Model Files:
+  ✓ model.safetensors (522.71 MB)
+  ✓ pytorch_model.bin (522.73 MB)
+
+✅ READY: Model is complete and ready to deploy
+
+Next step: sovstack up gpt2
+```
 
 ### Remove a Cached Model
 
@@ -380,7 +433,98 @@ sovstack init
 sovstack deploy meta-llama/Llama-2-7b-chat-hf
 ```
 
+## Configuration
+
+### Model Cache Location
+
+By default, models are cached in `~/.sovereignstack/models`. For systems with large downloads:
+
+```bash
+# Use a larger disk
+sovstack config set cache-dir /mnt/nvme/models
+
+# Verify configuration
+sovstack config get cache-dir
+```
+
+### Logging and Audit Trails
+
+SovereignStack automatically logs all operations (downloads, config changes, deployments) to `~/.sovereignstack/logs/audit.log`.
+
+For production systems, store logs in a standard location:
+
+```bash
+# Linux: Use /var/log (automatically detected if writable)
+sovstack config set log-dir /var/log/sovereignstack
+
+# Custom location
+sovstack config set log-dir /opt/sovereignstack/logs
+
+# View where logs are stored
+sovstack config list
+```
+
+Audit logs are JSON-formatted for easy parsing:
+```json
+{
+  "timestamp": "2026-04-27T20:05:05+10:00",
+  "action": "model_download",
+  "user": "gayangunapala",
+  "details": "model=gpt2 2 files",
+  "status": "success"
+}
+```
+
+### Hugging Face Gated Models
+
+For gated models (like Llama 2), configure your Hugging Face token:
+
+```bash
+# Securely store your token (encrypted)
+sovstack config set hf-token hf_xxxxxxxxxxxx
+
+# Or use environment variable for CI/CD
+export HF_TOKEN=hf_xxxxxxxxxxxx
+sovstack pull meta-llama/Llama-2-7b-hf
+```
+
+Token is encrypted with AES-256 and stored in `~/.sovereignstack/config.json`.
+
 ## Troubleshooting
+
+### Model download fails with 401 Unauthorized
+
+This usually means the model is gated and requires authentication:
+
+```bash
+# 1. Accept license on Hugging Face
+# Visit: https://huggingface.co/meta-llama/Llama-2-7b-hf
+# Click "I have read and agree to the License Agreement"
+
+# 2. Create API token
+# Visit: https://huggingface.co/settings/tokens
+
+# 3. Configure the token
+sovstack config set hf-token hf_xxxxxxxxxxxx
+
+# 4. Try again
+sovstack pull meta-llama/Llama-2-7b-hf
+```
+
+### Download incomplete or corrupted
+
+Verify and re-download:
+
+```bash
+# Check status
+sovstack verify model-name
+
+# If incomplete, re-download
+sovstack pull model-name
+
+# Verify again
+sovstack verify model-name
+```
 
 ### CUDA not detected (GPU systems)
 ```bash
@@ -396,10 +540,16 @@ sudo usermod -aG docker $USER
 # Logout and login again
 ```
 
-### Model pull fails
-Ensure you have a Hugging Face token:
+### Out of disk space
 ```bash
-export HF_TOKEN=your_token_here
+# Check current cache usage
+sovstack status
+
+# Remove unused models
+sovstack remove old-model
+
+# Change cache location to larger disk
+sovstack config set cache-dir /mnt/large-disk/models
 ```
 
 ## Development
