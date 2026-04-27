@@ -17,7 +17,7 @@ Mark tasks `[x]` when complete. Tasks within the same phase with no listed depen
 | ID | Title | Phase | Priority | Status | Depends On |
 |---|---|---|---|---|---|
 | TASK-001 | Real Hugging Face model download | 1 | Critical | [x] | — |
-| TASK-002 | Complete the deploy pipeline | 1 | Critical | [ ] | TASK-001 |
+| TASK-002 | Complete the deploy pipeline | 1 | Critical | [x] | TASK-001 |
 | TASK-003 | Fix status command bug | 1 | High | [ ] | — |
 | TASK-004 | Upgrade init to auto-install prerequisites | 1 | High | [x] | — |
 | TASK-005 | Unify the two cache systems | 1 | High | [ ] | TASK-001 |
