@@ -34,12 +34,17 @@ type AuditEvent struct {
 
 type AuditLogger struct {
 	logFile string
+	logDir  string
 }
 
-// NewAuditLogger creates a new audit logger
-func NewAuditLogger(configDir string) *AuditLogger {
+// NewAuditLogger creates a new audit logger with automatic directory creation
+func NewAuditLogger(logDir string) *AuditLogger {
+	// Ensure log directory exists
+	_ = os.MkdirAll(logDir, 0755)
+
 	return &AuditLogger{
-		logFile: filepath.Join(configDir, "audit.log"),
+		logDir:  logDir,
+		logFile: filepath.Join(logDir, "audit.log"),
 	}
 }
 

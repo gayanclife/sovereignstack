@@ -52,6 +52,14 @@ var configSetCmd = &cobra.Command{
 			auditor.LogConfigChange(key, "success")
 			fmt.Printf("✓ Cache directory set to: %s\n", value)
 
+		case "log-dir":
+			if err := configMgr.SetLogDir(value); err != nil {
+				auditor.LogConfigChange(key, "failed")
+				return fmt.Errorf("failed to set log-dir: %w", err)
+			}
+			auditor.LogConfigChange(key, "success")
+			fmt.Printf("✓ Log directory set to: %s\n", value)
+
 		case "hf-token":
 			if err := configMgr.SetHFToken(value); err != nil {
 				auditor.LogConfigChange(key, "failed")
@@ -84,6 +92,9 @@ var configGetCmd = &cobra.Command{
 		case "cache-dir":
 			fmt.Printf("%s\n", configMgr.GetCacheDir())
 
+		case "log-dir":
+			fmt.Printf("%s\n", configMgr.GetLogDir())
+
 		case "hf-token":
 			token := configMgr.GetHFToken()
 			if token == "" {
@@ -112,6 +123,7 @@ var configListCmd = &cobra.Command{
 		fmt.Println("SovereignStack Configuration:")
 		fmt.Println()
 		fmt.Printf("  cache-dir:      %s\n", configMgr.GetCacheDir())
+		fmt.Printf("  log-dir:        %s\n", configMgr.GetLogDir())
 		token := configMgr.GetHFToken()
 		if token == "" {
 			fmt.Printf("  hf-token:       (not set)\n")
@@ -120,7 +132,7 @@ var configListCmd = &cobra.Command{
 		}
 		fmt.Println()
 		fmt.Printf("  Config file:    %s/config.json\n", configMgr.GetConfigDir())
-		fmt.Printf("  Audit log:      %s/audit.log\n", configMgr.GetConfigDir())
+		fmt.Printf("  Audit log:      %s/audit.log\n", configMgr.GetLogDir())
 
 		return nil
 	},

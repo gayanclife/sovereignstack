@@ -26,10 +26,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 type Config struct {
 	CacheDir string `json:"cache_dir"`
+	LogDir   string `json:"log_dir"`
 	HFToken  string `json:"hf_token"` // Encrypted
 }
 
@@ -65,8 +67,49 @@ func NewManager() (*Manager, error) {
 	if m.config.CacheDir == "" {
 		m.config.CacheDir = filepath.Join(configDir, "models")
 	}
+	if m.config.LogDir == "" {
+		m.config.LogDir = m.getDefaultLogDir()
+	}
 
 	return m, nil
+}
+
+// getDefaultLogDir returns the appropriate log directory based on OS
+func (m *Manager) getDefaultLogDir() string {
+	switch runtime.GOOS {
+	case "linux":
+		// Try /var/log first on Linux
+		if isWritable("/var/log") {
+			return "/var/log/sovereignstack"
+		}
+	case "darwin":
+		// macOS: ~/Library/Logs
+		home, _ := os.UserHomeDir()
+		logsDir := filepath.Join(home, "Library", "Logs")
+		if isWritable(logsDir) {
+			return filepath.Join(logsDir, "sovereignstack")
+		}
+	case "windows":
+		// Windows: %APPDATA%/sovereignstack/logs
+		if appData := os.Getenv("APPDATA"); appData != "" && isWritable(appData) {
+			return filepath.Join(appData, "sovereignstack", "logs")
+		}
+	}
+
+	// Fallback to config directory
+	return filepath.Join(m.configDir, "logs")
+}
+
+// isWritable checks if a directory is writable
+func isWritable(path string) bool {
+	// Create test file
+	testFile := filepath.Join(path, ".sovereignstack_write_test")
+	err := os.WriteFile(testFile, []byte("test"), 0600)
+	if err == nil {
+		_ = os.Remove(testFile)
+		return true
+	}
+	return false
 }
 
 // GetCacheDir returns the configured cache directory (with env var override)
@@ -75,6 +118,14 @@ func (m *Manager) GetCacheDir() string {
 		return dir
 	}
 	return m.config.CacheDir
+}
+
+// GetLogDir returns the configured log directory (with env var override)
+func (m *Manager) GetLogDir() string {
+	if dir := os.Getenv("SOVEREIGNSTACK_LOG_DIR"); dir != "" {
+		return dir
+	}
+	return m.config.LogDir
 }
 
 // GetHFToken returns the HF token (with env var override and decryption)
@@ -92,6 +143,12 @@ func (m *Manager) GetHFToken() string {
 // SetCacheDir sets the cache directory
 func (m *Manager) SetCacheDir(dir string) error {
 	m.config.CacheDir = dir
+	return m.save()
+}
+
+// SetLogDir sets the log directory
+func (m *Manager) SetLogDir(dir string) error {
+	m.config.LogDir = dir
 	return m.save()
 }
 

@@ -51,7 +51,7 @@ func NewCacheManager(cacheDir string) (*CacheManager, error) {
 		return nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
-	auditor := config.NewAuditLogger(configMgr.GetConfigDir())
+	auditor := config.NewAuditLogger(configMgr.GetLogDir())
 
 	cm := &CacheManager{
 		cacheDir:     cacheDir,
