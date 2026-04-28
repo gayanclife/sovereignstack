@@ -95,7 +95,12 @@ package <package_name>
 - All `sovstack` CLI commands (build, deploy, status, stop, pull, gateway, keys, etc.)
 - All bash commands within the workspace (tests, builds, scripts, file operations)
 - Docker commands for container management
-- Git operations (commit, push, branch management)
+- Git operations (branch management)
+
+**Always ask before:**
+- Creating commits (ask if changes should be committed before running `git commit`)
+- Pushing to remote (ask before `git push`)
+- Running destructive operations (force push, hard reset, etc.)
 
 **Exception — Large Model Downloads:**
 Commands like `sovstack pull <model>` that download large models (>1GB) may be resource-intensive for this machine. Before running such commands, confirm the model size. Skip the download if it would exceed available disk space or cause performance issues. Commands that test auto-pull with small models (distilbert, TinyLlama, etc.) are safe without confirmation.
