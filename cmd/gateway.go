@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -31,7 +33,9 @@ func init() {
 	gatewayCmd.Flags().Int("port", 8001, "Port for gateway to listen on")
 	gatewayCmd.Flags().Float64("rate-limit", 100, "Requests per minute per user (0 = unlimited)")
 	gatewayCmd.Flags().String("api-key-header", "X-API-Key", "Header name for API key")
-	gatewayCmd.Flags().Int("audit-buffer", 10000, "Number of audit logs to keep in memory")
+	gatewayCmd.Flags().Int("audit-buffer", 10000, "Number of audit logs to keep in memory (only for in-memory logger)")
+	gatewayCmd.Flags().String("audit-db", "./sovstack-audit.db", "Path to SQLite audit database (empty = in-memory only)")
+	gatewayCmd.Flags().String("audit-key", "", "Encryption key for audit logs (reads SOVSTACK_AUDIT_KEY env var if not set)")
 	rootCmd.AddCommand(gatewayCmd)
 }
 
@@ -41,9 +45,34 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	rateLimit, _ := cmd.Flags().GetFloat64("rate-limit")
 	apiKeyHeader, _ := cmd.Flags().GetString("api-key-header")
 	auditBuffer, _ := cmd.Flags().GetInt("audit-buffer")
+	auditDB, _ := cmd.Flags().GetString("audit-db")
+	auditKey, _ := cmd.Flags().GetString("audit-key")
 
-	// Create audit logger
-	auditLogger := audit.NewLogger(auditBuffer)
+	// Resolve encryption key
+	if auditKey == "" {
+		auditKey = os.Getenv("SOVSTACK_AUDIT_KEY")
+	}
+	if auditKey == "" && auditDB != "" {
+		// Generate a new key and print it for the user
+		keyBytes := make([]byte, 32)
+		rand.Read(keyBytes)
+		auditKey = hex.EncodeToString(keyBytes)
+		fmt.Printf("\n⚠️  Generated audit encryption key (save this for future restarts):\n")
+		fmt.Printf("   SOVSTACK_AUDIT_KEY=%s\n\n", auditKey)
+	}
+
+	// Create audit logger (SQLite or in-memory)
+	var auditLogger audit.AuditLogger
+	var err error
+
+	if auditDB != "" {
+		auditLogger, err = audit.NewSQLiteLogger(auditDB, auditKey)
+		if err != nil {
+			return fmt.Errorf("failed to create SQLite audit logger: %w", err)
+		}
+	} else {
+		auditLogger = audit.NewLogger(auditBuffer)
+	}
 
 	// Create auth provider with some example keys
 	authProvider := gateway.NewAPIKeyAuthProvider()
@@ -68,7 +97,11 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Listening: %s\n", listenAddr)
 	fmt.Printf("  Rate Limit: %.0f req/min per user\n", rateLimit)
 	fmt.Printf("  API Key Header: %s\n", apiKeyHeader)
-	fmt.Printf("  Audit Buffer: %d logs\n", auditBuffer)
+	if auditDB != "" {
+		fmt.Printf("  Audit Log: SQLite (encrypted) at %s\n", auditDB)
+	} else {
+		fmt.Printf("  Audit Log: In-memory (%d logs max)\n", auditBuffer)
+	}
 	fmt.Printf("\nExample test keys:\n")
 	fmt.Printf("  - sk_test_123 (test-user)\n")
 	fmt.Printf("  - sk_demo_456 (demo-user)\n")
@@ -107,7 +140,7 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func handleAuditLogs(w http.ResponseWriter, r *http.Request, logger *audit.Logger) {
+func handleAuditLogs(w http.ResponseWriter, r *http.Request, logger audit.AuditLogger) {
 	w.Header().Set("Content-Type", "application/json")
 
 	n := 100 // Default: last 100 logs
@@ -147,7 +180,7 @@ func handleAuditLogs(w http.ResponseWriter, r *http.Request, logger *audit.Logge
 	fmt.Fprintf(w, `]}`)
 }
 
-func handleAuditStats(w http.ResponseWriter, r *http.Request, logger *audit.Logger) {
+func handleAuditStats(w http.ResponseWriter, r *http.Request, logger audit.AuditLogger) {
 	w.Header().Set("Content-Type", "application/json")
 	stats := logger.GetStats()
 

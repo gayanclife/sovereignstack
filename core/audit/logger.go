@@ -6,6 +6,20 @@ import (
 	"time"
 )
 
+// AuditLogger defines the audit logging interface
+type AuditLogger interface {
+	Log(entry AuditLog)
+	LogRequest(user, model, endpoint, method, ipAddress, userAgent, correlationID string, requestSize int64)
+	LogResponse(user, model, endpoint, correlationID string, statusCode int, responseSize int64, tokensUsed, tokensGenerated int, durationMS int64)
+	LogError(user, endpoint, correlationID, errMsg string, statusCode int, ipAddress string)
+	LogAuthFailure(user, endpoint, ipAddress, reason string)
+	GetLogs(n int) []AuditLog
+	GetLogsByUser(user string) []AuditLog
+	GetLogsByModel(model string) []AuditLog
+	GetLogsInTimeRange(start, end time.Time) []AuditLog
+	GetStats() map[string]interface{}
+}
+
 // AuditLevel represents the severity level of an audit event
 type AuditLevel string
 

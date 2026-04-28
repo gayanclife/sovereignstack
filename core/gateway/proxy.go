@@ -37,7 +37,7 @@ type Gateway struct {
 	targetURL      *url.URL
 	proxy          *httputil.ReverseProxy
 	authProvider   AuthProvider
-	auditLogger    *audit.Logger
+	auditLogger    audit.AuditLogger
 	rateLimiter    *RateLimiter
 	requestsPerMin float64 // Tokens per minute per user
 	APIKeyHeader   string  // Header name for API key (default: "X-API-Key")
@@ -45,11 +45,11 @@ type Gateway struct {
 
 // GatewayConfig holds gateway configuration
 type GatewayConfig struct {
-	TargetURL      string        // Backend vLLM service URL (e.g., http://localhost:8000)
-	AuthProvider   AuthProvider  // Custom auth provider
-	AuditLogger    *audit.Logger // Audit logger
-	RequestsPerMin float64       // Rate limit: requests per minute (0 = unlimited)
-	APIKeyHeader   string        // Header for API key (default: X-API-Key)
+	TargetURL      string           // Backend vLLM service URL (e.g., http://localhost:8000)
+	AuthProvider   AuthProvider     // Custom auth provider
+	AuditLogger    audit.AuditLogger // Audit logger
+	RequestsPerMin float64          // Rate limit: requests per minute (0 = unlimited)
+	APIKeyHeader   string           // Header for API key (default: X-API-Key)
 }
 
 // NewGateway creates a new reverse proxy gateway
