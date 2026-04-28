@@ -406,9 +406,10 @@ func scanLogs(rows *sql.Rows, key []byte) []AuditLog {
 	for rows.Next() {
 		var log AuditLog
 		var encIPAddr, encUserAgent, encErrMsg string
+		var id string
 
 		err := rows.Scan(
-			nil, // id
+			&id, // id (scanned but not used)
 			&log.Timestamp, &log.EventType, &log.Level, &log.User, &log.Model,
 			&log.Method, &log.Endpoint, &log.RequestSize, &log.ResponseSize,
 			&log.TokensUsed, &log.TokensGenerated, &log.DurationMS, &log.StatusCode,

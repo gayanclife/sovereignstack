@@ -21,7 +21,7 @@ Mark tasks `[x]` when complete. Tasks within the same phase with no listed depen
 | TASK-003 | Fix status command bug | 1 | High | [x] | — |
 | TASK-004 | Upgrade init to auto-install prerequisites | 1 | High | [x] | — |
 | TASK-005 | Unify the two cache systems | 1 | High | [x] | TASK-001 |
-| TASK-006 | Encrypted SQLite audit log | 1 | High | [ ] | — |
+| TASK-006 | Encrypted SQLite audit log | 1 | High | [x] | — |
 | TASK-007 | Gateway API key management | 1 | Medium | [ ] | — |
 | TASK-008 | Update model registry to current models | 1 | Medium | [ ] | — |
 | TASK-009 | Provider interface + OnPrem implementation | 1 | Medium | [ ] | TASK-002 |
