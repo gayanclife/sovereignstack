@@ -140,6 +140,7 @@ def health():
 
 @app.post("/v1/chat/completions")
 def chat_completions(req: dict):
+    global pipe, task_type, tokenizer, model
     if pipe is None and model is None:
         return {"error": f"Failed to load model from {model_path}"}, 500
 
