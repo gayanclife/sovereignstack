@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,16 +25,16 @@ import (
 
 // InstallStatus represents the current installation state
 type InstallStatus struct {
-	CUDAInstalled              bool
-	CUDAVersion                string
-	ContainerToolkitInstalled  bool
-	DockerInstalled            bool
-	DockerVersion              string
-	NVIDIADriverInstalled      bool
-	NVIDIADriverVersion        string
-	OS                         string
-	HasSudo                    bool
-	OSSupported                bool
+	CUDAInstalled             bool
+	CUDAVersion               string
+	ContainerToolkitInstalled bool
+	DockerInstalled           bool
+	DockerVersion             string
+	NVIDIADriverInstalled     bool
+	NVIDIADriverVersion       string
+	OS                        string
+	HasSudo                   bool
+	OSSupported               bool
 }
 
 // IssuesToFix identifies which prerequisites are missing
@@ -77,7 +77,7 @@ func VerifyInstallation() (*InstallStatus, error) {
 func GetIssuesToFix(status *InstallStatus) *IssuesToFix {
 	return &IssuesToFix{
 		// CUDA only required if NVIDIA drivers are detected (meaning GPUs present)
-		MissingCUDA:             !status.CUDAInstalled && status.NVIDIADriverInstalled,
+		MissingCUDA: !status.CUDAInstalled && status.NVIDIADriverInstalled,
 		// Container Toolkit only required if we have Docker AND GPUs
 		MissingContainerToolkit: !status.ContainerToolkitInstalled && status.DockerInstalled && status.NVIDIADriverInstalled,
 		MissingDocker:           !status.DockerInstalled,

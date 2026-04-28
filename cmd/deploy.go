@@ -1,11 +1,18 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 
 	"github.com/gayanclife/sovereignstack/core"
 	"github.com/gayanclife/sovereignstack/core/engine"
+	"github.com/gayanclife/sovereignstack/core/model"
+	"github.com/gayanclife/sovereignstack/internal/docker"
 	"github.com/spf13/cobra"
 )
 
@@ -13,15 +20,55 @@ import (
 var deployCmd = &cobra.Command{
 	Use:   "deploy [model-name]",
 	Short: "Deploy a model to the inference server",
-	Long: `Deploy a specified model to the vLLM inference server.
-The model must be pulled first using 'sovstack pull'. This command
-will start the Docker container with optimized GPU parameters.`,
-	Args: cobra.ExactArgs(1),
+	Long: `Deploy a specified model to the inference server.
+
+The model will be automatically pulled from Hugging Face if:
+- It's not cached locally, OR
+- The cached directory exists but contains no model files
+
+If no model is specified, you'll be prompted to choose from available models.
+
+Use --force to stop and restart an already running model.
+
+This command will start the Docker container with optimized GPU parameters.`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		modelName := args[0]
+		var modelName string
+		if len(args) == 0 {
+			// No model specified, prompt user to choose
+			selectedModel, err := promptDeployModelSelection()
+			if err != nil {
+				return err
+			}
+			modelName = selectedModel
+		} else {
+			modelName = args[0]
+		}
 		port, _ := cmd.Flags().GetInt("port")
 		quantStr, _ := cmd.Flags().GetString("quantization")
 		rebuild, _ := cmd.Flags().GetBool("rebuild")
+		force, _ := cmd.Flags().GetBool("force")
+
+		// If --force, stop any running instance first
+		if force {
+			ctx := context.Background()
+			runningModels, err := docker.GetRunningModels(ctx)
+			if err == nil {
+				for _, m := range runningModels {
+					if strings.Contains(m.ModelName, modelName) || strings.Contains(m.ContainerID, modelName) {
+						fmt.Printf("Stopping running instance: %s\n", m.ModelName)
+						stopCmd := exec.CommandContext(ctx, "docker", "stop", m.ContainerID[:12])
+						if err := stopCmd.Run(); err != nil {
+							fmt.Printf("⚠ Warning: Failed to stop container: %v\n", err)
+						} else {
+							fmt.Println("✓ Stopped")
+						}
+						break
+					}
+				}
+			}
+			fmt.Println()
+		}
 
 		fmt.Printf("Deploying model: %s\n", modelName)
 
@@ -57,6 +104,60 @@ will start the Docker container with optimized GPU parameters.`,
 				}
 			}
 			return nil
+		}
+
+		// Auto-pull model if not cached or incomplete
+		fmt.Printf("🔍 Checking model cache status for: %s\n", modelName)
+
+		cm, err := model.NewCacheManager("./models")
+		if err != nil {
+			fmt.Printf("⚠ Failed to create CacheManager: %v\n", err)
+			fmt.Printf("   Will attempt deployment without pre-check\n\n")
+		} else {
+			fmt.Printf("   Cache directory: ./models\n")
+
+			mm, err2 := model.NewManager("./models")
+			if err2 != nil {
+				fmt.Printf("⚠ Failed to create Manager: %v\n", err2)
+			} else {
+				needsPull := false
+				var pullReason string
+
+				// Check if model directory exists and has valid files
+				validateErr := mm.ValidateModel(modelName)
+
+				if validateErr != nil {
+					errMsg := validateErr.Error()
+					fmt.Printf("   Validation result: %s\n", errMsg)
+
+					// Model is missing or invalid, need to pull
+					if strings.Contains(errMsg, "not cached") || strings.Contains(errMsg, "no model files") || strings.Contains(errMsg, "unknown model") {
+						needsPull = true
+						if strings.Contains(errMsg, "not cached") {
+							pullReason = "not cached"
+						} else if strings.Contains(errMsg, "no model files") {
+							pullReason = "incomplete (no model files)"
+						} else {
+							pullReason = "not in registry"
+						}
+					}
+				} else {
+					fmt.Printf("   ✅ Model is cached and valid\n")
+				}
+
+				if needsPull {
+					fmt.Printf("\n📥 Model %s. Auto-pulling %s...\n", pullReason, modelName)
+					pullErr := cm.DownloadModel(modelName)
+					if pullErr != nil {
+						fmt.Printf("⚠ Auto-pull failed: %v\n", pullErr)
+						fmt.Printf("   Try manually: sovstack pull %s\n\n", modelName)
+						return pullErr
+					}
+					fmt.Printf("✅ Model pulled successfully\n\n")
+				} else {
+					fmt.Printf("\n")
+				}
+			}
 		}
 
 		// Check if model is suitable for hardware
@@ -130,7 +231,8 @@ will start the Docker container with optimized GPU parameters.`,
 
 		fmt.Println()
 		fmt.Printf("✅ Model deployed successfully!\n")
-		fmt.Printf("  API endpoint: http://localhost:%d/v1/chat/completions\n", port)
+		fmt.Printf("  Check status: sovstack status\n")
+		fmt.Printf("  Stop model:   sovstack stop %s\n", modelName)
 		fmt.Println("  Run 'sovstack gateway' to start the secure proxy")
 
 		return nil
@@ -165,9 +267,85 @@ func getSuitableModelsInfo() ([]*core.ModelMetadata, []*core.ModelMetadata) {
 	return suitable, unsuitable
 }
 
+func promptDeployModelSelection() (string, error) {
+	// Load all available models
+	allModels, err := model.LoadAllModels()
+	if err != nil {
+		return "", fmt.Errorf("failed to load model registry: %w", err)
+	}
+
+	// Get models for the current hardware
+	engineConfig := engine.EngineConfig{
+		ModelCacheDir: "./models",
+		Port:          8000,
+	}
+
+	er, err := engine.NewEngineRoom(engineConfig)
+	if err != nil {
+		return "", fmt.Errorf("failed to initialize engine: %w", err)
+	}
+
+	suitable, _ := er.GetSuitableModels()
+	suitableMap := make(map[string]bool)
+	for _, m := range suitable {
+		suitableMap[m.Name] = true
+	}
+
+	// Filter available models to show only suitable ones
+	displayModels := make([]*core.ModelMetadata, 0)
+	displayNames := make([]string, 0)
+
+	// Preferred order
+	preferredOrder := []string{
+		"distilbert-base-uncased",
+		"TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+		"microsoft/Phi-2",
+		"google/gemma-2-2b-it",
+		"meta-llama/Llama-2-7b-hf",
+		"mistralai/Mistral-7B-v0.1",
+	}
+
+	for _, name := range preferredOrder {
+		if m, ok := allModels[name]; ok && suitableMap[m.Name] {
+			displayModels = append(displayModels, m)
+			displayNames = append(displayNames, name)
+		}
+	}
+
+	if len(displayModels) == 0 {
+		return "", fmt.Errorf("no suitable models available for your hardware")
+	}
+
+	fmt.Println("\n📋 Available Models for your hardware:")
+	fmt.Println()
+	for i, m := range displayModels {
+		paramStr := formatParameterCount(m.ParameterCount)
+		fmt.Printf("%d. %s\n", i+1, m.Name)
+		fmt.Printf("   %s\n", m.Description)
+		fmt.Printf("   Parameters: %s\n", paramStr)
+		fmt.Println()
+	}
+
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Print("Select model number (1-" + fmt.Sprintf("%d", len(displayModels)) + "): ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		num, err := strconv.Atoi(input)
+		if err != nil || num < 1 || num > len(displayModels) {
+			fmt.Printf("Invalid selection. Please enter a number between 1 and %d\n", len(displayModels))
+			continue
+		}
+
+		return displayNames[num-1], nil
+	}
+}
+
 func init() {
 	rootCmd.AddCommand(deployCmd)
 	deployCmd.Flags().IntP("port", "p", 8000, "Port to expose vLLM on")
 	deployCmd.Flags().StringP("quantization", "q", "auto", "Quantization type to use (auto/none/awq/gptq/int8)")
 	deployCmd.Flags().BoolP("rebuild", "r", false, "Force rebuild of inference engine Docker image")
+	deployCmd.Flags().BoolP("force", "f", false, "Stop and restart if model is already running")
 }

@@ -44,7 +44,7 @@ func pullImage(ctx context.Context, image string) error {
 // Start launches a vLLM container with the specified configuration
 func (vo *VLLMOrchestrator) Start(ctx context.Context, config InferenceConfig) (containerID string, err error) {
 	const vllmImage = "vllm/vllm-openai:latest"
-	containerName := "vllm-" + config.ModelName
+	containerName := GetContainerName(config.ModelName, true)
 
 	// Ensure vLLM image is available
 	exists, err := imageExists(ctx, vllmImage)
@@ -74,12 +74,20 @@ func (vo *VLLMOrchestrator) Start(ctx context.Context, config InferenceConfig) (
 		fmt.Printf("Port %d is in use, using port %d instead\n", config.Port, actualPort)
 	}
 
+	// Convert model path to absolute path for Docker volume mount
+	modelDir := filepath.Dir(config.ModelPath)
+	absModelDir, err := filepath.Abs(modelDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve model path: %w", err)
+	}
+
 	// Build vLLM command arguments
 	args := []string{
 		"run",
+		"-d", // Detached mode - container runs in background
 		"--shm-size", "2g",
 		"-p", fmt.Sprintf("%d:8000", actualPort),
-		"-v", fmt.Sprintf("%s:/models", filepath.Dir(config.ModelPath)),
+		"-v", fmt.Sprintf("%s:/models", absModelDir),
 		"--name", containerName,
 		"--restart", "unless-stopped",
 	}

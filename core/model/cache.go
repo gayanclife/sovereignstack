@@ -115,10 +115,25 @@ func (cm *CacheManager) GetCachedModel(modelName string) *CacheMetadata {
 
 // DownloadModel downloads a model from Hugging Face
 func (cm *CacheManager) DownloadModel(modelName string) error {
-	// Check if already cached
+	// Check if model is already cached AND has actual files
 	if cm.IsCached(modelName) {
-		fmt.Printf("✓ Model already cached: %s\n", modelName)
-		return nil
+		// Verify the model actually has files, not just a metadata entry
+		modelDir := filepath.Join(cm.cacheDir, modelName)
+		hasFiles := false
+		filepath.Walk(modelDir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && !info.IsDir() && (filepath.Ext(path) == ".safetensors" || filepath.Ext(path) == ".bin") {
+				hasFiles = true
+				return filepath.SkipDir
+			}
+			return nil
+		})
+
+		if hasFiles {
+			fmt.Printf("✓ Model already cached: %s\n", modelName)
+			return nil
+		}
+		// If no files found, continue with download below
+		fmt.Printf("⚠ Model cached but incomplete, re-downloading: %s\n", modelName)
 	}
 
 	fmt.Printf("📥 Downloading: %s\n", modelName)
@@ -130,10 +145,7 @@ func (cm *CacheManager) DownloadModel(modelName string) error {
 	}
 
 	// Try to download from Hugging Face
-	if err := cm.downloadFromHuggingFace(modelName, modelDir); err != nil {
-		fmt.Printf("⚠ Download error: %v\n", err)
-		fmt.Printf("  Creating cache entry anyway\n")
-	}
+	downloadErr := cm.downloadFromHuggingFace(modelName, modelDir)
 
 	// Calculate directory size
 	size, err := cm.getDirSize(modelDir)
@@ -141,7 +153,12 @@ func (cm *CacheManager) DownloadModel(modelName string) error {
 		size = 0
 	}
 
-	// Create metadata entry
+	// If download failed and no files were downloaded, return the error
+	if downloadErr != nil && size == 0 {
+		return downloadErr
+	}
+
+	// Create metadata entry only if files exist
 	meta := &CacheMetadata{
 		Name:       modelName,
 		Size:       size,

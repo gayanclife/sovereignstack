@@ -44,6 +44,25 @@ If a task requires a product decision (naming, behaviour, UX), consult `PRD.md` 
 
 ## Code Standards
 
+**Testing Requirements**
+Any code change should include relevant tests. This applies to:
+- New functions or methods
+- Modified behavior or logic changes
+- Bug fixes
+- New CLI commands or flags
+
+Skip tests only for:
+- Documentation-only changes
+- Simple refactors with no behavior change (rename, move code)
+- Configuration file updates
+- Comments or error message improvements
+
+When writing tests:
+- Place them in `*_test.go` files alongside the code
+- Use Go's standard `testing` package
+- Test both happy path and error cases
+- Run `go test ./...` to verify before committing
+
 **Copyright Header**
 All Go files must include the Apache License 2.0 copyright header at the top. This is required for all new files and when substantially modifying existing files.
 
@@ -67,6 +86,52 @@ limitations under the License.
 */
 package <package_name>
 ```
+
+---
+
+## Permissions & Execution
+
+**Allowed without prompting:**
+- All `sovstack` CLI commands (build, deploy, status, stop, pull, gateway, keys, etc.)
+- All bash commands within the workspace (tests, builds, scripts, file operations)
+- Docker commands for container management
+- Git operations (commit, push, branch management)
+
+**Exception — Large Model Downloads:**
+Commands like `sovstack pull <model>` that download large models (>1GB) may be resource-intensive for this machine. Before running such commands, confirm the model size. Skip the download if it would exceed available disk space or cause performance issues. Commands that test auto-pull with small models (distilbert, TinyLlama, etc.) are safe without confirmation.
+
+**These are trusted operations within the project workspace.**
+
+---
+
+## Documentation Standards
+
+**Documentation-Driven Changes**
+Whenever functional behavior changes, always update or create relevant documentation in the `docs/` folder. This is a hard requirement, not optional.
+
+**When to Update Docs:**
+- CLI command behavior changes (new flags, changed defaults, removed options)
+- API endpoint changes (new endpoints, changed request/response format)
+- Configuration file structure changes
+- User-facing workflow changes (deploy, stop, gateway, etc.)
+- Architecture changes that affect deployment or operations
+- New features or capability additions
+
+**What to Document:**
+1. **Command Reference** (`docs/cli-reference.md`) — all CLI commands, flags, examples
+2. **API Reference** (`docs/api-reference.md`) — all HTTP endpoints, request/response formats
+3. **Configuration Guide** (`docs/configuration.md`) — config files, environment variables
+4. **User Guide** (`docs/user-guide.md`) — step-by-step workflows, common tasks
+5. **Architecture** (`docs/architecture.md`) — how components work, Docker setup, hardware requirements
+
+**Process:**
+1. Make functional change to code
+2. Update relevant doc file(s) in `docs/`
+3. If no relevant doc exists, create one with a clear structure
+4. Build and test to verify code works
+5. Mark task complete in TASKS.md
+
+This ensures users always have accurate, up-to-date documentation.
 
 ---
 

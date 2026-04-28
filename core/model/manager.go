@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,10 +92,92 @@ func (m *Manager) ValidateModel(modelName string) error {
 		return fmt.Errorf("unknown model: %s", modelName)
 	}
 
-	// Check if model is cached locally
+	// Check if model directory exists
 	localPath := filepath.Join(m.cacheDir, modelName)
 	if info, err := os.Stat(localPath); err != nil || !info.IsDir() {
 		return fmt.Errorf("model not cached locally: %s. Run 'sovstack pull %s' first", modelName, modelName)
+	}
+
+	// Check for actual model files (not just placeholder directory)
+	hasModelFiles := false
+	err := filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() && (filepath.Ext(path) == ".safetensors" || filepath.Ext(path) == ".bin") {
+			hasModelFiles = true
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to validate model directory: %w", err)
+	}
+
+	if !hasModelFiles {
+		return fmt.Errorf("model directory exists but contains no model files: run 'sovstack pull %s'", modelName)
+	}
+
+	// Check safetensors files for corruption
+	err = filepath.Walk(localPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !info.IsDir() && filepath.Ext(path) == ".safetensors" {
+			if validErr := validateSafetensorsFile(path); validErr != nil {
+				return fmt.Errorf("model file is corrupt (%s): %v. Run 'sovstack pull -f %s' to re-download", filepath.Base(path), validErr, modelName)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateSafetensorsFile checks if a safetensors file is valid by reading its header
+func validateSafetensorsFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot open file: %w", err)
+	}
+	defer file.Close()
+
+	// Check file size
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("cannot stat file: %w", err)
+	}
+	fileSize := info.Size()
+	if fileSize < 8 {
+		return fmt.Errorf("file too small: %d bytes (minimum 8 bytes for header)", fileSize)
+	}
+
+	// safetensors format: 8-byte little-endian header size + JSON header + tensors
+	headerSizeBytes := make([]byte, 8)
+	n, err := file.Read(headerSizeBytes)
+	if err != nil || n < 8 {
+		return fmt.Errorf("cannot read header size: incomplete safetensors file")
+	}
+
+	headerSize := binary.LittleEndian.Uint64(headerSizeBytes)
+	if headerSize == 0 || headerSize > 1024*1024*100 { // header should be < 100MB
+		return fmt.Errorf("invalid safetensors header size: %d bytes", headerSize)
+	}
+
+	// Check if file has enough bytes for header
+	minFileSize := int64(8) + int64(headerSize)
+	if fileSize < minFileSize {
+		return fmt.Errorf("incomplete file: expected at least %d bytes (8 + %d header), got %d", minFileSize, headerSize, fileSize)
+	}
+
+	// Try to read the header to verify it's readable
+	headerBytes := make([]byte, headerSize)
+	n, err = file.Read(headerBytes)
+	if err != nil || int64(n) < int64(headerSize) {
+		return fmt.Errorf("incomplete safetensors file: expected %d header bytes, got %d", headerSize, n)
 	}
 
 	return nil

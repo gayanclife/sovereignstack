@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,7 +40,7 @@ This command should be run on a fresh server before deploying models.
 SovereignStack supports both GPU-accelerated and CPU-only deployments.
 GPU deployment requires NVIDIA drivers and CUDA. CPU-only deployments only need Docker.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("Running pre-flight checks...\n")
+		fmt.Println("Running pre-flight checks...")
 
 		// Run initial hardware checks
 		status, err := installer.VerifyInstallation()

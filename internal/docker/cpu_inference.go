@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -64,49 +64,75 @@ print(f"From path: {model_path}")
 
 pipe = None
 task_type = None
+tokenizer = None
+model = None
 
-# Check if model files exist locally
+# Try to load local model directly
 if os.path.exists(model_path):
     print(f"Found local model at {model_path}")
-    print(f"Files: {os.listdir(model_path)}")
+    files = os.listdir(model_path)
+    print(f"Files: {files}")
 
-    # Try to load as a classification model first (most common for local inference)
+    # Check for safetensors file
+    safetensors_files = [f for f in files if f.endswith('.safetensors')]
+    if safetensors_files:
+        for sf in safetensors_files:
+            path = os.path.join(model_path, sf)
+            size = os.path.getsize(path)
+            print(f"  {sf}: {size / 1024 / 1024 / 1024:.2f} GB")
+
     try:
-        print("Loading as text-classification...")
-        tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
-        model = AutoModel.from_pretrained(model_path, local_files_only=True)
-        pipe = pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
-        task_type = "text-classification"
-        print("✓ Loaded as text-classification")
-    except Exception as e:
-        print(f"Failed: {str(e)[:100]}")
-        pipe = None
+        print("Attempting to load model from local path...")
 
-# Fallback: try downloading from HuggingFace
-if pipe is None:
-    pipeline_types = [
-        "text-generation",
-        "text2text-generation",
-        "text-classification",
-        "feature-extraction"
-    ]
-
-    for task in pipeline_types:
-        try:
-            print(f"Trying {task}...")
-            pipe = pipeline(
-                task,
-                model=model_name,
+        # Try different loading strategies
+        loading_strategies = [
+            # Strategy 1: Full pipeline load
+            ("text-generation pipeline (local)", lambda: pipeline(
+                "text-generation",
+                model=model_path,
+                local_files_only=True,
                 device=-1,
                 torch_dtype=torch.float32,
                 trust_remote_code=True
-            )
-            task_type = task
-            print(f"✓ Loaded as {task}")
-            break
-        except Exception as e:
-            print(f"  {task} failed: {str(e)[:100]}")
-            continue
+            )),
+            # Strategy 2: Direct AutoModelForCausalLM load (for LLMs)
+            ("AutoModelForCausalLM (local)", lambda: (
+                AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True),
+                __import__('transformers').AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32, trust_remote_code=True)
+            )),
+            # Strategy 3: Direct AutoModel load (fallback for other model types)
+            ("AutoModel (local)", lambda: (
+                AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True),
+                __import__('transformers').AutoModel.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32, trust_remote_code=True)
+            )),
+        ]
+
+        for strategy_name, loader in loading_strategies:
+            try:
+                print(f"  Trying {strategy_name}...")
+                result = loader()
+
+                # Check if result is a pipeline or tuple
+                if isinstance(result, tuple):
+                    tokenizer, model = result
+                    task_type = "direct"
+                    print(f"✓ Loaded with {strategy_name}")
+                    break
+                else:
+                    pipe = result
+                    task_type = "text-generation"
+                    print(f"✓ Loaded with {strategy_name}")
+                    break
+            except Exception as e:
+                err_str = str(e)
+                print(f"    Failed: {err_str}")
+                if "incomplete metadata" in err_str or "file not fully covered" in err_str:
+                    print(f"    → Model file appears incomplete. Try: sovstack pull -f <model_name>")
+                continue
+
+    except Exception as e:
+        print(f"All local loading strategies failed: {str(e)}")
+        print("Attempting fallback strategies...")
 
 @app.get("/health")
 def health():
@@ -114,7 +140,7 @@ def health():
 
 @app.post("/v1/chat/completions")
 def chat_completions(req: dict):
-    if pipe is None:
+    if pipe is None and model is None:
         return {"error": f"Failed to load model from {model_path}"}, 500
 
     messages = req.get("messages", [])
@@ -126,23 +152,60 @@ def chat_completions(req: dict):
     temperature = req.get("temperature", 0.7)
 
     try:
-        # Handle different task types
-        if task_type == "text-generation":
-            result = pipe(
-                prompt,
-                max_new_tokens=max_tokens,
-                do_sample=True,
-                temperature=max(0.1, temperature),
-                truncation=True
-            )
-            if isinstance(result, list) and len(result) > 0:
-                content = result[0].get("generated_text", str(result[0]))
-                if content.startswith(prompt):
-                    content = content[len(prompt):].strip()
-            else:
-                content = str(result)
+        content = None
 
-        elif task_type == "text-classification":
+        # Handle direct model inference (when pipeline fails but model loads)
+        if task_type == "direct" and model is not None and tokenizer is not None:
+            print(f"Using direct model inference for: {prompt[:50]}...")
+            inputs = tokenizer(prompt, return_tensors="pt")
+            with torch.no_grad():
+                outputs = model.generate(
+                    inputs["input_ids"],
+                    max_new_tokens=max_tokens,
+                    temperature=max(0.1, temperature),
+                    do_sample=True,
+                    top_p=0.95
+                )
+            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
+
+        # Handle different pipeline task types
+        elif task_type == "text-generation" and pipe is not None:
+            try:
+                result = pipe(
+                    prompt,
+                    max_new_tokens=max_tokens,
+                    do_sample=True,
+                    temperature=max(0.1, temperature),
+                    truncation=True
+                )
+                if isinstance(result, list) and len(result) > 0:
+                    content = result[0].get("generated_text", str(result[0]))
+                    if content.startswith(prompt):
+                        content = content[len(prompt):].strip()
+                else:
+                    content = str(result)
+            except Exception as pipe_err:
+                print(f"Pipeline failed: {str(pipe_err)[:100]}")
+                # Fall back to direct model inference if pipeline fails
+                if tokenizer is not None and model is not None:
+                    print("Falling back to direct model inference...")
+                    inputs = tokenizer(prompt, return_tensors="pt")
+                    with torch.no_grad():
+                        outputs = model.generate(
+                            inputs["input_ids"],
+                            max_new_tokens=max_tokens,
+                            temperature=max(0.1, temperature),
+                            do_sample=True,
+                            top_p=0.95
+                        )
+                    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                    content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
+                    task_type = "direct"
+                else:
+                    raise pipe_err
+
+        elif task_type == "text-classification" and pipe is not None:
             result = pipe(prompt, truncation=True)
             if isinstance(result, list) and len(result) > 0:
                 label = result[0].get("label", "unknown")
@@ -151,16 +214,19 @@ def chat_completions(req: dict):
             else:
                 content = str(result)
 
-        elif task_type == "feature-extraction":
+        elif task_type == "feature-extraction" and pipe is not None:
             result = pipe(prompt, truncation=True)
             content = f"Extracted features"
 
-        else:  # text2text-generation
+        elif pipe is not None:  # text2text-generation or other
             result = pipe(prompt, max_length=max_tokens, do_sample=True, temperature=max(0.1, temperature))
             if isinstance(result, list) and len(result) > 0:
                 content = result[0].get("generated_text", str(result[0]))
             else:
                 content = str(result)
+
+        if content is None:
+            return {"error": "Failed to generate response"}, 500
 
         return {
             "id": "chatcmpl-cpu",
@@ -199,7 +265,7 @@ func NewCPUInferenceOrchestrator() *CPUInferenceOrchestrator {
 
 // Start launches a CPU inference container
 func (co *CPUInferenceOrchestrator) Start(ctx context.Context, config InferenceConfig) (containerID string, err error) {
-	containerName := "cpu-" + config.ModelName
+	containerName := GetContainerName(config.ModelName, false)
 
 	// Check if image exists (skip if rebuild requested)
 	if config.RebuildImage {
@@ -235,11 +301,20 @@ func (co *CPUInferenceOrchestrator) Start(ctx context.Context, config InferenceC
 
 	// Build docker run command
 	fmt.Printf("Starting container on port %d...\n", actualPort)
+
+	// Convert model path to absolute path for Docker volume mount
+	modelDir := filepath.Dir(config.ModelPath)
+	absModelDir, err := filepath.Abs(modelDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve model path: %w", err)
+	}
+
 	args := []string{
 		"run",
+		"-d", // Detached mode - container runs in background
 		"--shm-size", "2g",
 		"-p", fmt.Sprintf("%d:8000", actualPort),
-		"-v", fmt.Sprintf("%s:/model", filepath.Dir(config.ModelPath)),
+		"-v", fmt.Sprintf("%s:/model", absModelDir),
 		"-e", "MODEL_PATH=/model/" + filepath.Base(config.ModelPath),
 		"-e", "HF_HOME=/model",
 		"--name", containerName,

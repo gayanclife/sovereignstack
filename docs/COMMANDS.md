@@ -168,9 +168,11 @@ Models are cached in:
 
 ## sovstack deploy
 
-Deploy a model to the vLLM inference server.
+Deploy a model to the inference server.
 
 Validates hardware compatibility, creates a deployment plan, and starts a Docker container running the model with an OpenAI-compatible API.
+
+**Automatic model pulling:** If the model is not cached or the cache is incomplete (directory exists but no model files), `deploy` will automatically pull it from Hugging Face before deploying.
 
 ### Usage
 
@@ -182,7 +184,7 @@ sovstack deploy <model-name> [flags]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<model-name>` | yes | Model name (must be downloaded with `pull` first) |
+| `<model-name>` | yes | Model name from Hugging Face (will be auto-pulled if not cached) |
 
 ### Flags
 
@@ -281,9 +283,110 @@ curl http://localhost:8000/v1/chat/completions \
 
 ---
 
+## sovstack stop
+
+Stop and remove a running model safely.
+
+Stops the inference container and removes it from Docker. Works even if the container was started outside of SovereignStack. Designed with safety in mind — requires explicit confirmation when stopping multiple models.
+
+### Usage
+
+```bash
+sovstack stop <model-name>              # Stop a specific model
+sovstack stop --all                     # Stop all running models (requires confirmation)
+```
+
+### Arguments
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `model-name` | Conditional | Name of the model to stop (required unless `--all` is used) |
+
+### Flags
+
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--all` | `-a` | boolean | false | Stop all running models (requires confirmation prompt) |
+| `--help` | `-h` | - | - | Show help message |
+
+### Examples
+
+**Stop a specific model (no confirmation needed):**
+```bash
+./sovstack stop mistralai/Mistral-7B-v0.3
+```
+
+**Stop another model:**
+```bash
+./sovstack stop distilbert-base-uncased
+```
+
+**Stop all running models (with confirmation):**
+```bash
+./sovstack stop --all
+# Running models:
+#   • mistralai/Mistral-7B-v0.3
+#   • distilbert-base-uncased
+#
+# ⚠️  This will stop 2 model(s). Continue? [y/N]: y
+```
+
+**Using short flag:**
+```bash
+./sovstack stop -a
+```
+
+### Output — Specific Model
+
+```
+✓ Model mistralai/Mistral-7B-v0.3 stopped
+```
+
+### Output — All Models
+
+```
+Running models:
+  • mistralai/Mistral-7B-v0.3
+  • distilbert-base-uncased
+
+⚠️  This will stop 2 model(s). Continue? [y/N]: y
+
+Stopping all 2 running model(s)...
+
+✓ Stopped mistralai/Mistral-7B-v0.3
+✓ Stopped distilbert-base-uncased
+```
+
+### What It Does
+
+1. Queries Docker for the running container matching the model name
+2. (If `--all` is used) Shows list of running models and requires confirmation
+3. Stops the container gracefully (SIGTERM)
+4. Removes the stopped container from Docker
+5. Cleans up any local state tracking
+
+### Safety Features
+
+- **Specific Model:** Requires explicit model name (no accidental stops)
+- **All Models:** Requires `--all` flag AND user confirmation (prevents accidents)
+- **Clear Feedback:** Shows which models will be stopped before confirming
+- **Error Handling:** Reports any failures without silently ignoring them
+
+### Container Detection
+
+The `stop` command queries Docker directly using the model name. It looks for containers matching the `ss-*` naming pattern:
+- `ss-vllm-{modelname}` — GPU inference containers
+- `ss-cpu-{modelname}` — CPU inference containers
+
+This means you can stop models even if they were started manually via Docker or in a different session.
+
+---
+
 ## sovstack status
 
-Show running models, GPU utilization, and health status.
+Show system hardware, running models, and cached models.
+
+Queries Docker directly to get the actual state of running models (container detection is based on `ss-*` naming pattern).
 
 ### Usage
 
@@ -293,35 +396,88 @@ sovstack status
 
 ### Flags
 
-| Flag | Type | Description |
-|------|------|-------------|
-| `--help, -h` | - | Show help message |
+| Flag | Short | Type | Default | Description |
+|------|-------|------|---------|-------------|
+| `--running` | - | boolean | false | Show only running models |
+| `--cached` | - | boolean | false | Show only cached models |
+| `--hardware` | - | boolean | false | Show only hardware info |
+| `--detailed` | `-d` | boolean | false | Show detailed file listing for cached models |
+| `--json` | `-j` | boolean | false | Output as JSON (not yet implemented) |
+| `--help` | `-h` | - | - | Show help message |
+
+### Usage Examples
+
+```bash
+# Show everything (default)
+./sovstack status
+
+# Show only running models
+./sovstack status --running
+
+# Show only cached models
+./sovstack status --cached
+
+# Show only hardware information
+./sovstack status --hardware
+
+# Show running models and hardware (skip cached)
+./sovstack status --running --hardware
+
+# Show cached models with file details
+./sovstack status --cached --detailed
+```
 
 ### Output
 
 ```
+📊 SovereignStack Status
+═══════════════════════════════════════════
+
+🚀 Running Models (2)
+──────────────────────────────────────────
+  • mistralai/Mistral-7B-v0.3 (started: 14:32:45)
+    Container ID: ss-vllm-mistralai
+    Quantization: awq
+    Health: true
+
+  • distilbert-base-uncased (started: 14:25:12)
+    Container ID: ss-cpu-distilbert
+    Quantization: none
+    Health: true
+
 🖥️  Hardware
-  GPUs: 1x NVIDIA RTX 4090 (24 GB VRAM)
-  CPU:  16 cores
-  RAM:  64.0 GB
-  CUDA: 12.1
+──────────────────────────────────────────
+  GPUs: None (CPU-only system)
+  CPU: 4 cores
+  RAM: 15.0 GB
+  CUDA: Not installed
   Docker: ✓ installed
 
-🚀 Running Models
-  vllm-mistralai/Mistral-7B-v0.3  →  http://localhost:8000  (up 2h)
+💾 Cached Models (2)
+──────────────────────────────────────────
+1. mistralai/Mistral-7B-Instruct-v0.3 [✓ Ready to deploy]
+   Size: 5.0 GB
+   Location: ./models/mistralai/Mistral-7B-Instruct-v0.3
 
-📦 Cached Models
-  mistralai/Mistral-7B-Instruct-v0.3 (5.0 GB)
-  meta-llama/Llama-3.1-8B-Instruct (4.5 GB)
+2. distilbert-base-uncased [✓ Ready to deploy]
+   Size: 511.10 MB
+   Location: ./models/distilbert-base-uncased
 ```
 
 ### What It Does
 
-1. Detects GPU count and VRAM
-2. Shows CPU cores and system RAM
-3. Lists running Docker containers with vLLM models
-4. Shows port and uptime for each running model
-5. Lists cached models and their sizes
+1. **Hardware Detection:** Shows GPU count/VRAM, CPU cores, system RAM, CUDA version, Docker status
+2. **Running Models:** Queries Docker for containers with `ss-*` prefix (SovereignStack-managed)
+3. **Cached Models:** Lists downloaded models and their cache status
+4. **Health Status:** Shows if models are passing health checks
+
+### Container Naming
+
+SovereignStack uses Docker containers named with the `ss-` prefix for easy identification:
+- `ss-vllm-{modelname}` — GPU inference (vLLM)
+- `ss-cpu-{modelname}` — CPU inference (FastAPI)
+
+Example: A deployed Mistral model appears as `ss-vllm-mistralai/Mistral-7B-v0.3`
 
 ---
 

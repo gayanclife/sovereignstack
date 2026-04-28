@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"sync"
 	"time"
 
 	"github.com/gayanclife/sovereignstack/core"
@@ -13,12 +15,13 @@ import (
 
 // EngineRoom is the main inference engine orchestrator
 type EngineRoom struct {
-	hardware     *hardware.SystemHardware
-	modelManager *model.Manager
-	engines      map[string]docker.InferenceEngine // one engine per running model
+	hardware      *hardware.SystemHardware
+	modelManager  *model.Manager
+	engines       map[string]docker.InferenceEngine // one engine per running model
 	runningModels map[string]*core.ModelInstance    // models keyed by model name
-	quantCalc    *model.QuantizationCalculator
-	config       EngineConfig
+	modelsMutex   sync.RWMutex                      // protects runningModels and engines
+	quantCalc     *model.QuantizationCalculator
+	config        EngineConfig
 }
 
 // EngineConfig contains engine configuration
@@ -62,13 +65,16 @@ func NewEngineRoom(config EngineConfig) (*EngineRoom, error) {
 		availableVRAM = config.VRAMLimit
 	}
 
-	return &EngineRoom{
-		hardware:     hw,
-		modelManager: modelMgr,
-		engine:       docker.NewInferenceEngine(len(hw.GPUs) > 0),
-		quantCalc:    model.NewQuantizationCalculator(availableVRAM),
-		config:       config,
-	}, nil
+	er := &EngineRoom{
+		hardware:      hw,
+		modelManager:  modelMgr,
+		engines:       make(map[string]docker.InferenceEngine),
+		runningModels: loadRunningModels(), // Load from disk
+		quantCalc:     model.NewQuantizationCalculator(availableVRAM),
+		config:        config,
+	}
+
+	return er, nil
 }
 
 // GetSystemInfo returns information about the system
@@ -128,7 +134,6 @@ func (er *EngineRoom) Deploy(ctx context.Context, modelName string, optionalQuan
 		return fmt.Errorf("unknown model: %s", modelName)
 	}
 
-
 	// Determine quantization
 	quant := optionalQuantization
 	if quant == nil {
@@ -145,7 +150,20 @@ func (er *EngineRoom) Deploy(ctx context.Context, modelName string, optionalQuan
 		return err
 	}
 
-	// Create inference engine config
+	// Check if model is actually running in Docker (not just in memory/persistence)
+	runningModels, err := docker.GetRunningModels(ctx)
+	if err == nil {
+		for _, model := range runningModels {
+			if model.ModelName == modelName && model.Status == "running" {
+				return fmt.Errorf("model %s is already running (container: %s)", modelName, model.ContainerID[:12])
+			}
+		}
+	}
+
+	// Create a new engine instance for this model
+	engine := docker.NewInferenceEngine(len(er.hardware.GPUs) > 0)
+
+	// Create inference engine config with auto-assigned port
 	inferenceCfg := docker.InferenceConfig{
 		ModelPath:            modelPath,
 		ModelName:            modelName,
@@ -159,70 +177,143 @@ func (er *EngineRoom) Deploy(ctx context.Context, modelName string, optionalQuan
 	}
 
 	// Start inference engine container
-	containerID, err := er.engine.Start(ctx, inferenceCfg)
+	containerID, err := engine.Start(ctx, inferenceCfg)
 	if err != nil {
 		return fmt.Errorf("failed to start inference engine: %w", err)
 	}
 
-	// Wait for health check
-	maxRetries := 30
-	for i := 0; i < maxRetries; i++ {
-		if err := er.engine.HealthCheck(ctx, er.config.Port); err == nil {
-			break
-		}
-		if i == maxRetries-1 {
-			return fmt.Errorf("inference engine container failed health check after 30s")
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(1 * time.Second):
-		}
-	}
-
-	// Update running model
-	er.runningModel = &core.ModelInstance{
+	// Add to running models and engines maps immediately (no blocking)
+	er.modelsMutex.Lock()
+	er.engines[modelName] = engine
+	er.runningModels[modelName] = &core.ModelInstance{
 		ID:              containerID,
 		ModelName:       modelName,
 		Quantization:    *quant,
 		ContainerID:     containerID,
 		StartedAt:       time.Now(),
-		IsHealthy:       true,
+		IsHealthy:       false,
 		LastHealthCheck: time.Now(),
 	}
+	er.modelsMutex.Unlock()
+
+	// Persist running models to disk
+	er.modelsMutex.RLock()
+	_ = saveRunningModels(er.runningModels)
+	er.modelsMutex.RUnlock()
+
+	// Start background health monitoring
+	go er.backgroundHealthCheck(modelName, engine, inferenceCfg.Port)
 
 	return nil
 }
 
-// Stop stops the running model
-func (er *EngineRoom) Stop(ctx context.Context) error {
-	if er.runningModel == nil {
-		return fmt.Errorf("no model running")
+// backgroundHealthCheck monitors model health asynchronously (for models that didn't pass initial check)
+func (er *EngineRoom) backgroundHealthCheck(modelName string, engine docker.InferenceEngine, port int) {
+	ctx := context.Background()
+	maxRetries := 45 // Continue for up to 45 more seconds (total 60)
+	for i := 0; i < maxRetries; i++ {
+		if err := engine.HealthCheck(ctx, port); err == nil {
+			// Update health status
+			er.modelsMutex.Lock()
+			if model, exists := er.runningModels[modelName]; exists {
+				model.IsHealthy = true
+				model.LastHealthCheck = time.Now()
+				// Save updated state
+				saveRunningModels(er.runningModels)
+			}
+			er.modelsMutex.Unlock()
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
+}
+
+// StopModel stops a specific running model by name (queries Docker directly)
+func (er *EngineRoom) StopModel(ctx context.Context, modelName string) error {
+	// Query Docker for the model container (works for GPU or CPU inference)
+	runningModels, err := docker.GetRunningModels(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to query running models: %w", err)
 	}
 
-	if err := er.engine.Stop(ctx); err != nil {
-		return err
+	var containerID string
+	for _, model := range runningModels {
+		if model.ModelName == modelName {
+			containerID = model.ContainerID
+			break
+		}
 	}
 
-	_ = er.engine.Remove(ctx) // Best effort cleanup
-	er.runningModel = nil
+	if containerID == "" {
+		return fmt.Errorf("model %s is not running", modelName)
+	}
+
+	// Stop and remove the container directly via Docker
+	stopCmd := exec.CommandContext(ctx, "docker", "stop", containerID)
+	if err := stopCmd.Run(); err != nil {
+		return fmt.Errorf("failed to stop container: %w", err)
+	}
+
+	removeCmd := exec.CommandContext(ctx, "docker", "rm", containerID)
+	if err := removeCmd.Run(); err != nil {
+		// Don't fail if removal fails, container is already stopped
+	}
+
+	// Clean up in-memory state if it exists
+	er.modelsMutex.Lock()
+	delete(er.engines, modelName)
+	delete(er.runningModels, modelName)
+	er.modelsMutex.Unlock()
 
 	return nil
 }
 
-// Status returns the status of the engine
+// GetRunningModels returns all currently running models by querying Docker
+func (er *EngineRoom) GetRunningModels() map[string]*core.ModelInstance {
+	ctx := context.Background()
+	runningDockerModels, err := docker.GetRunningModels(ctx)
+	if err != nil {
+		// Log Docker query error but don't fail - fallback to in-memory state
+		// Common causes: Docker not running, permission denied, or Docker not installed
+		_ = err // Ignore for now, use fallback
+
+		er.modelsMutex.RLock()
+		defer er.modelsMutex.RUnlock()
+		result := make(map[string]*core.ModelInstance)
+		for name, instance := range er.runningModels {
+			result[name] = instance
+		}
+		return result
+	}
+
+	// Convert Docker state to ModelInstance objects
+	result := make(map[string]*core.ModelInstance)
+	for _, dockerModel := range runningDockerModels {
+		// Only include running containers
+		if dockerModel.Status == "running" {
+			isHealthy := dockerModel.Status == "running"
+			result[dockerModel.ModelName] = &core.ModelInstance{
+				ID:              dockerModel.ContainerID,
+				ModelName:       dockerModel.ModelName,
+				ContainerID:     dockerModel.ContainerID,
+				StartedAt:       time.Now(), // Docker doesn't track start time easily, use now
+				IsHealthy:       isHealthy,
+				LastHealthCheck: time.Now(),
+			}
+		}
+	}
+	return result
+}
+
+// Status returns the status of the engine (queries Docker for actual state)
 func (er *EngineRoom) Status(ctx context.Context) *EngineStatus {
-	status := &EngineStatus{
-		Timestamp:        time.Now(),
-		Hardware:         er.hardware,
-		RunningModel:     er.runningModel,
-		ModelCacheDir:    er.config.ModelCacheDir,
-		ContainerRunning: false,
-	}
+	runningModels := er.GetRunningModels()
 
-	if er.runningModel != nil {
-		running, _ := er.engine.IsRunning(ctx)
-		status.ContainerRunning = running
+	status := &EngineStatus{
+		Timestamp:     time.Now(),
+		Hardware:      er.hardware,
+		RunningModels: runningModels,
+		ModelCacheDir: er.config.ModelCacheDir,
 	}
 
 	return status
@@ -257,9 +348,8 @@ func (er *EngineRoom) ListModels() map[string]*core.ModelMetadata {
 
 // EngineStatus represents the current state of the engine
 type EngineStatus struct {
-	Timestamp        time.Time
-	Hardware         *hardware.SystemHardware
-	RunningModel     *core.ModelInstance
-	ModelCacheDir    string
-	ContainerRunning bool
+	Timestamp     time.Time
+	Hardware      *hardware.SystemHardware
+	RunningModels map[string]*core.ModelInstance
+	ModelCacheDir string
 }

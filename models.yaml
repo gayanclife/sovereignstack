@@ -110,8 +110,8 @@ cpu_models:
     default_quantization: int8
     tags: ["cpu", "embeddings", "classification", "small", "fast"]
 
-  - name: TinyLlama/TinyLlama-1.1B
-    repo: TinyLlama/TinyLlama-1.1B
+  - name: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
     description: "TinyLlama - small but capable LLM, great for on-premise CPU deployment"
     parameters: "1.1B"
     context_length: 2048
@@ -126,8 +126,8 @@ cpu_models:
     default_quantization: int8
     tags: ["cpu", "llm", "chat", "small", "efficient"]
 
-  - name: microsoft/phi-2
-    repo: microsoft/phi-2
+  - name: microsoft/Phi-2
+    repo: microsoft/Phi-2
     description: "Microsoft Phi-2 - state-of-the-art small language model"
     parameters: "2.7B"
     context_length: 2048

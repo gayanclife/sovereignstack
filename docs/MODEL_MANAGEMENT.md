@@ -86,6 +86,86 @@ Downloads are resumable. If interrupted:
 
 ---
 
+## Running Models
+
+### Start a Model
+
+Deploy a cached model to start inference:
+
+```bash
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3
+```
+
+Auto-pulls the model if not cached locally first.
+
+### View Running Models
+
+See which models are currently running:
+
+```bash
+./sovstack status
+```
+
+Shows:
+- Container IDs
+- Quantization method
+- Health status
+- Port (if deployed with custom port)
+
+### Container Management
+
+SovereignStack uses Docker containers with the `ss-` prefix for identification:
+- `ss-vllm-{modelname}` — GPU inference (vLLM, for models with GPUs)
+- `ss-cpu-{modelname}` — CPU inference (FastAPI, for CPU-only models)
+
+This makes it easy to identify SovereignStack containers in Docker:
+
+```bash
+# List all SovereignStack containers
+docker ps -f "name=ss-"
+
+# Example output:
+# CONTAINER ID  IMAGE              NAMES                              STATUS
+# abc123def45   vllm/vllm-openai  ss-vllm-mistralai/Mistral-7B-v0.3  Up 2h
+# xyz789abc12   sovereignstack-cpu ss-cpu-distilbert-base-uncased    Up 45m
+```
+
+### Stop a Model
+
+Stop inference and remove a running model:
+
+```bash
+./sovstack stop mistralai/Mistral-7B-Instruct-v0.3
+```
+
+The `stop` command:
+1. Finds the Docker container by model name
+2. Stops it gracefully
+3. Removes the container
+
+**Note:** Works even if the container was started manually or in a different session.
+
+### Multiple Models
+
+SovereignStack supports running multiple models concurrently:
+
+```bash
+# Deploy first model (uses port 8000)
+./sovstack deploy mistralai/Mistral-7B-Instruct-v0.3
+
+# Deploy second model (automatically uses port 8001 if 8000 is busy)
+./sovstack deploy distilbert-base-uncased
+
+# View all running models
+./sovstack status
+
+# Stop individual models
+./sovstack stop mistralai/Mistral-7B-Instruct-v0.3
+./sovstack stop distilbert-base-uncased
+```
+
+---
+
 ## Caching Strategy
 
 ### Default Cache Location

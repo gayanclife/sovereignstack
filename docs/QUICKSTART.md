@@ -5,6 +5,9 @@ Get SovereignStack running in 5 minutes on a fresh Ubuntu machine.
 ## Prerequisites
 
 - Ubuntu 20.04 or later
+- **Docker installed** (required for all deployments)
+  - If Docker permission denied: run `sudo usermod -aG docker $USER` (then log out and back in)
+  - Or use `sudo sovstack` to run commands
 - **GPU:** NVIDIA GPU + CUDA (optional — GPU accelerates inference ~10-50x)
 - **CPU-only:** Supported! Ideal for testing and small models (TinyLlama 1.1B, Phi-3 Mini 3.8B)
 - 8 GB RAM minimum (16 GB+ recommended)

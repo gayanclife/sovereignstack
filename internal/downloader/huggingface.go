@@ -5,7 +5,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@ limitations under the License.
 package downloader
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gayanclife/sovereignstack/internal/config"
+	"github.com/schollz/progressbar/v3"
 )
 
 // HFDownloader handles Hugging Face model downloads
@@ -35,7 +37,6 @@ type HFDownloader struct {
 	auditor    *config.AuditLogger
 }
 
-
 // NewHFDownloader creates a new Hugging Face downloader
 func NewHFDownloader(cacheDir string, auditor *config.AuditLogger) *HFDownloader {
 	token := os.Getenv("HF_TOKEN")
@@ -44,11 +45,11 @@ func NewHFDownloader(cacheDir string, auditor *config.AuditLogger) *HFDownloader
 	}
 
 	return &HFDownloader{
-		token:      token,
-		cacheDir:   cacheDir,
-		auditor:    auditor,
+		token:    token,
+		cacheDir: cacheDir,
+		auditor:  auditor,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 30 * time.Minute, // Large models can take 10-20+ minutes to download
 		},
 	}
 }
@@ -60,14 +61,28 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	// Try common model file names
+	// Try common model file names and metadata files
+	// Order matters: try weights first, then metadata
 	commonFiles := []string{
+		// Model weights (required)
 		"model.safetensors",
 		"pytorch_model.bin",
 		"model.bin",
 		"adapter_model.bin",
 		"model.gguf",
 		"model.pt",
+		// Critical metadata files (required for loading)
+		"config.json",
+		"tokenizer.json",
+		"tokenizer_config.json",
+		// Optional but useful
+		"generation_config.json",
+		"special_tokens_map.json",
+		"vocab.json",
+		"merges.txt",
+		"spiece.model",
+		"added_tokens.json",
+		"preprocessor_config.json",
 	}
 
 	fmt.Printf("   Checking for model files in %s...\n", modelID)
@@ -103,6 +118,20 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 				d.auditor.LogModelDownload(modelID, "failed", filename)
 			}
 			continue
+		}
+
+		// Validate safetensors files after download
+		if strings.HasSuffix(filename, ".safetensors") {
+			if err := validateSafetensorsFile(destPath); err != nil {
+				fmt.Printf("   ⚠ Downloaded file is corrupt: %v\n", err)
+				fmt.Printf("   ⚠ File size: %d bytes\n", resp.ContentLength)
+				fmt.Printf("   ⚠ Removing file and retrying download...\n")
+				os.Remove(destPath)
+				if d.auditor != nil {
+					d.auditor.LogModelDownload(modelID, "failed", fmt.Sprintf("safetensors validation failed: %v", err))
+				}
+				continue
+			}
 		}
 
 		fmt.Printf("   ✓ Downloaded\n")
@@ -182,8 +211,22 @@ func (d *HFDownloader) downloadFile(url, destPath string, totalSize int64, model
 	}
 	defer file.Close()
 
-	// Copy with progress
-	written, err := io.Copy(file, resp.Body)
+	// Create progress bar
+	bar := progressbar.NewOptions64(
+		totalSize-startByte,
+		progressbar.OptionSetWriter(os.Stderr),
+		progressbar.OptionShowBytes(true),
+		progressbar.OptionShowCount(),
+		progressbar.OptionSetWidth(50),
+		progressbar.OptionThrottle(100*time.Millisecond),
+		progressbar.OptionUseANSICodes(true),
+	)
+
+	// Copy with progress bar
+	proxyReader := io.TeeReader(resp.Body, bar)
+	written, err := io.Copy(file, proxyReader)
+	bar.Close()
+
 	if err != nil {
 		return fmt.Errorf("download interrupted: %w", err)
 	}
@@ -191,7 +234,65 @@ func (d *HFDownloader) downloadFile(url, destPath string, totalSize int64, model
 	// Verify complete
 	finalSize := startByte + written
 	if finalSize != totalSize {
-		return fmt.Errorf("incomplete download: got %d bytes, expected %d bytes", finalSize, totalSize)
+		return fmt.Errorf("incomplete download: got %d bytes, expected %d bytes (from Content-Length header: %d, written: %d, startByte: %d)", finalSize, totalSize, totalSize, written, startByte)
+	}
+
+	// Get actual file size to double-check
+	fileInfo, err := os.Stat(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to verify downloaded file: %w", err)
+	}
+
+	if fileInfo.Size() != totalSize {
+		return fmt.Errorf("file size mismatch: disk has %d bytes, expected %d bytes", fileInfo.Size(), totalSize)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n") // newline after progress bar
+
+	return nil
+}
+
+// validateSafetensorsFile checks if a safetensors file is valid by reading its header
+func validateSafetensorsFile(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("cannot open file: %w", err)
+	}
+	defer file.Close()
+
+	// Check file size
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("cannot stat file: %w", err)
+	}
+	fileSize := info.Size()
+	if fileSize < 8 {
+		return fmt.Errorf("file too small: %d bytes (minimum 8 bytes for header)", fileSize)
+	}
+
+	// safetensors format: 8-byte little-endian header size + JSON header + tensors
+	headerSizeBytes := make([]byte, 8)
+	n, err := file.Read(headerSizeBytes)
+	if err != nil || n < 8 {
+		return fmt.Errorf("cannot read header size: incomplete safetensors file")
+	}
+
+	headerSize := binary.LittleEndian.Uint64(headerSizeBytes)
+	if headerSize == 0 || headerSize > 1024*1024*100 { // header should be < 100MB
+		return fmt.Errorf("invalid safetensors header size: %d bytes", headerSize)
+	}
+
+	// Check if file has enough bytes for header
+	minFileSize := int64(8) + int64(headerSize)
+	if fileSize < minFileSize {
+		return fmt.Errorf("incomplete file: expected at least %d bytes (8 + %d header), got %d", minFileSize, headerSize, fileSize)
+	}
+
+	// Try to read the header to verify it's readable
+	headerBytes := make([]byte, headerSize)
+	n, err = file.Read(headerBytes)
+	if err != nil || int64(n) < int64(headerSize) {
+		return fmt.Errorf("incomplete safetensors file: expected %d header bytes, got %d", headerSize, n)
 	}
 
 	return nil
