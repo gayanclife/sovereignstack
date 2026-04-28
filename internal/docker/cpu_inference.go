@@ -160,16 +160,21 @@ def chat_completions(req: dict):
         # Handle direct model inference (when pipeline fails but model loads)
         if task_type == "direct" and model is not None and tokenizer is not None:
             print(f"Using direct model inference for: {prompt[:50]}...")
+            model.eval()
             inputs = tokenizer(prompt, return_tensors="pt")
+            print(f"Input shape: {inputs['input_ids'].shape}")
             with torch.no_grad():
                 outputs = model.generate(
                     inputs["input_ids"],
                     max_new_tokens=max_tokens,
                     temperature=max(0.1, temperature),
                     do_sample=True,
-                    top_p=0.95
+                    top_p=0.95,
+                    pad_token_id=tokenizer.eos_token_id
                 )
+            print(f"Output shape: {outputs.shape}")
             generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            print(f"Generated text length: {len(generated_text)}")
             content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
 
         # Handle different pipeline task types
@@ -193,16 +198,21 @@ def chat_completions(req: dict):
                 # Fall back to direct model inference if pipeline fails
                 if tokenizer is not None and model is not None:
                     print("Falling back to direct model inference...")
+                    model.eval()
                     inputs = tokenizer(prompt, return_tensors="pt")
+                    print(f"Input shape: {inputs['input_ids'].shape}")
                     with torch.no_grad():
                         outputs = model.generate(
                             inputs["input_ids"],
                             max_new_tokens=max_tokens,
                             temperature=max(0.1, temperature),
                             do_sample=True,
-                            top_p=0.95
+                            top_p=0.95,
+                            pad_token_id=tokenizer.eos_token_id
                         )
+                    print(f"Output shape: {outputs.shape}")
                     generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                    print(f"Generated text length: {len(generated_text)}")
                     content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
                     task_type = "direct"
                 else:
