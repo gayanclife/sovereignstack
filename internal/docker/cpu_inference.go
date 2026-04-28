@@ -163,19 +163,37 @@ def chat_completions(req: dict):
             model.eval()
             inputs = tokenizer(prompt, return_tensors="pt")
             print(f"Input shape: {inputs['input_ids'].shape}")
+
             with torch.no_grad():
-                outputs = model.generate(
-                    inputs["input_ids"],
-                    max_new_tokens=max_tokens,
-                    temperature=max(0.1, temperature),
-                    do_sample=True,
-                    top_p=0.95,
-                    pad_token_id=tokenizer.eos_token_id
-                )
-            print(f"Output shape: {outputs.shape}")
-            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            print(f"Generated text length: {len(generated_text)}")
-            content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
+                # Check if model has generate method (text generation models)
+                if hasattr(model, 'generate'):
+                    outputs = model.generate(
+                        inputs["input_ids"],
+                        max_new_tokens=max_tokens,
+                        temperature=max(0.1, temperature),
+                        do_sample=True,
+                        top_p=0.95,
+                        pad_token_id=tokenizer.eos_token_id
+                    )
+                    print(f"Output shape: {outputs.shape}")
+                    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                    print(f"Generated text length: {len(generated_text)}")
+                    content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
+                else:
+                    # Classification or embedding model
+                    outputs = model(**inputs)
+                    if hasattr(outputs, 'logits'):
+                        logits = outputs.logits[0]
+                        scores = torch.softmax(logits, dim=-1)
+                        top_idx = torch.argmax(scores).item()
+                        top_score = scores[top_idx].item()
+                        if hasattr(model.config, 'id2label') and model.config.id2label:
+                            label = model.config.id2label[top_idx]
+                        else:
+                            label = f"class_{top_idx}"
+                        content = f"Label: {label} (confidence: {top_score:.2f})"
+                    else:
+                        content = f"Model output: {str(outputs)[:100]}"
 
         # Handle different pipeline task types
         elif task_type == "text-generation" and pipe is not None:
@@ -202,18 +220,35 @@ def chat_completions(req: dict):
                     inputs = tokenizer(prompt, return_tensors="pt")
                     print(f"Input shape: {inputs['input_ids'].shape}")
                     with torch.no_grad():
-                        outputs = model.generate(
-                            inputs["input_ids"],
-                            max_new_tokens=max_tokens,
-                            temperature=max(0.1, temperature),
-                            do_sample=True,
-                            top_p=0.95,
-                            pad_token_id=tokenizer.eos_token_id
-                        )
-                    print(f"Output shape: {outputs.shape}")
-                    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-                    print(f"Generated text length: {len(generated_text)}")
-                    content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
+                        # Check if model has generate method (text generation models)
+                        if hasattr(model, 'generate'):
+                            outputs = model.generate(
+                                inputs["input_ids"],
+                                max_new_tokens=max_tokens,
+                                temperature=max(0.1, temperature),
+                                do_sample=True,
+                                top_p=0.95,
+                                pad_token_id=tokenizer.eos_token_id
+                            )
+                            print(f"Output shape: {outputs.shape}")
+                            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+                            print(f"Generated text length: {len(generated_text)}")
+                            content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
+                        else:
+                            # Classification or embedding model
+                            outputs = model(**inputs)
+                            if hasattr(outputs, 'logits'):
+                                logits = outputs.logits[0]
+                                scores = torch.softmax(logits, dim=-1)
+                                top_idx = torch.argmax(scores).item()
+                                top_score = scores[top_idx].item()
+                                if hasattr(model.config, 'id2label') and model.config.id2label:
+                                    label = model.config.id2label[top_idx]
+                                else:
+                                    label = f"class_{top_idx}"
+                                content = f"Label: {label} (confidence: {top_score:.2f})"
+                            else:
+                                content = f"Model output: {str(outputs)[:100]}"
                     task_type = "direct"
                 else:
                     raise pipe_err
