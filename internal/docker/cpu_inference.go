@@ -120,6 +120,8 @@ if os.path.exists(model_path):
                     break
                 else:
                     pipe = result
+                    tokenizer = pipe.tokenizer
+                    model = pipe.model
                     task_type = "text-generation"
                     print(f"✓ Loaded with {strategy_name}")
                     break
