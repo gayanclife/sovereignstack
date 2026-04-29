@@ -14,9 +14,9 @@ RUN go mod download
 COPY . .
 
 # Build management API
-RUN CGO_ENABLED=1 GOOS=linux go build \
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
     -ldflags="-s -w" \
-    -o sovstack ./cmd
+    -o sovstack .
 
 # Runtime image
 FROM alpine:3.19
@@ -28,8 +28,9 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# Copy built binary
+# Copy built binary and make it executable
 COPY --from=builder /build/sovstack /app/sovstack
+RUN chmod +x /app/sovstack
 
 EXPOSE 8888
 
