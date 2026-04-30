@@ -1,9 +1,14 @@
-# === Project Binaries & Build Artifacts ===
+# =============================================================================
+# SovereignStack — main stack (open source) gitignore
+# =============================================================================
+
+# --- Project binaries & build artefacts -------------------------------------
 bin/
 dist/
 build/
 out/
-sovstack
+/sovstack
+/sovereignstack
 *.exe
 *.exe~
 *.dll
@@ -11,79 +16,112 @@ sovstack
 *.dylib
 *.test
 *.out
+coverage.txt
+coverage.html
+*.prof
 
-# === Language Specific (Go / Python) ===
-# Go
+# --- Go ----------------------------------------------------------------------
 go.work
+go.work.sum
 /pkg/
 /go.sum.bak
 .cache/
 
-# Python (if using for scripts/testing)
+# --- Python (test scripts only; no production Python in this repo) -----------
 __pycache__/
 venv/
 .venv/
 *.py[cod]
 *$py.class
 
-# === AI/ML Data (The Heavy Stuff) ===
-# Do NOT commit downloaded models - they are large (5-40GB+) and can be re-downloaded
-# Users can pull models with: sovstack pull <model-name>
-#
-# DO commit: models.yaml (bundled model registry)
-# DO NOT commit: Downloaded model weights in models/ directory
-#
-models/                          # Downloaded model weights from Hugging Face (IGNORE)
-models.local.yaml                # Local model overrides (user-specific, IGNORE)
-datasets/                        # Training/Fine-tuning data
-.cache/                          # All cache directories
-.cache/huggingface/              # HF cache directory
-.cache/vllm/                     # vLLM cache directory
-.sovereignstack/                 # User config: cache, logs, tokens (IGNORE)
-.sovereignstack/models/          # Cached models (user-local, IGNORE)
-.sovereignstack/logs/            # User audit logs (IGNORE)
-.sovereignstack/config.json      # User configuration (tokens, paths, IGNORE)
+# --- AI/ML model weights (large; regenerated via `sovstack pull`) ------------
+# DO commit: models.yaml (bundled registry); DO NOT commit: downloaded weights.
+models/
+models.local.yaml
+datasets/
+.cache/
+.cache/huggingface/
+.cache/vllm/
+*.safetensors
+*.bin
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.tflite
 
-# === Infrastructure & DevOps ===
-# Docker
+# --- User-local data (per-machine state) ------------------------------------
+.sovereignstack/
+.sovereignstack/models/
+.sovereignstack/logs/
+.sovereignstack/config.json
+.sovereignstack/keys.json
+.sovereignstack/tls/
+
+# --- Demo / start-script output ---------------------------------------------
+logs/
+.demo-pids
+*.pid
+
+# --- Infrastructure / DevOps -------------------------------------------------
 volumes/
 docker-compose.override.yml
 
-# Terraform (Future Phase)
+# Terraform
 .terraform/
 *.tfstate*
 *.tfvars
 .terraform.lock.hcl
 
-# Cloud CLI configs
+# Cloud CLIs
 .aws/
 .azure/
 .gcloud/
 
-# Monitoring Data
+# Monitoring data dirs
 monitoring/data/
 grafana_data/
+prometheus_data/
 
-# === Security, Secrets & Privacy ===
-# Environment & Keys
+# --- Secrets & sensitive files ----------------------------------------------
 .env
 .env.*
-!.env.example        # Keep example file for others
+!.env.example
 *.pem
 *.key
+*.crt
 credentials.json
+keys.json
 
-# Medical/Audit Logs (Sensitive!)
-*.db                 # Local SQLite audit logs
+# --- Databases (SQLite audit + dev) ------------------------------------------
+*.db
 *.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+sovstack-audit.db
+audit.db
+metrics.db
+anomalies.db
+
+# --- Audit log files (cold path JSONL) ---------------------------------------
+audit-*.jsonl
+audit-*.jsonl.gz
+*.audit.log
+
+# --- Logs --------------------------------------------------------------------
 *.log
 logs/
 
-# === IDE & OS Garbage ===
+# --- IDE / OS noise ----------------------------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
+*.swn
 *~
 .DS_Store
 .DS_Store?
@@ -93,6 +131,16 @@ logs/
 ehthumbs.db
 Thumbs.db
 
-# === Temp Files ===
+# --- Temp ------------------------------------------------------------------
 *.tmp
 *.temp
+.tmp/
+.scratch/
+
+# --- Claude Code / agent metadata (per-developer) ---------------------------
+.claude/
+
+# --- Plan / scratch markdown (kept locally only) ----------------------------
+.plans/
+PLAN.md.local
+NOTES.local.md
