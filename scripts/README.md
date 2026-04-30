@@ -129,7 +129,7 @@ docker-compose logs management
 Once management API is running on port 8888, the visibility platform can discover models:
 
 ```bash
-cd ~/Projects/sstack/sovereignstack-platform
+cd ~/Projects/sstack/sovereignstack-visibility
 
 # Ensure MAIN_STACK_API_URL is set correctly
 cat .env | grep MAIN_STACK_API_URL

@@ -34,22 +34,29 @@ type UserRateLimit struct {
 
 // Gateway is the HTTP reverse proxy with auth and audit logging
 type Gateway struct {
-	targetURL      *url.URL
-	proxy          *httputil.ReverseProxy
-	authProvider   AuthProvider
-	auditLogger    audit.AuditLogger
-	rateLimiter    *RateLimiter
-	requestsPerMin float64 // Tokens per minute per user
-	APIKeyHeader   string  // Header name for API key (default: "X-API-Key")
+	targetURL        *url.URL
+	proxy            *httputil.ReverseProxy
+	authProvider     AuthProvider
+	accessController AccessController
+	quotaManager     *TokenQuotaManager
+	modelRouter      *ModelRouter
+	Metrics          *GatewayMetrics
+	auditLogger      audit.AuditLogger
+	rateLimiter      *RateLimiter
+	requestsPerMin   float64 // Tokens per minute per user
+	APIKeyHeader     string  // Header name for API key (default: "X-API-Key")
 }
 
 // GatewayConfig holds gateway configuration
 type GatewayConfig struct {
-	TargetURL      string           // Backend vLLM service URL (e.g., http://localhost:8000)
-	AuthProvider   AuthProvider     // Custom auth provider
-	AuditLogger    audit.AuditLogger // Audit logger
-	RequestsPerMin float64          // Rate limit: requests per minute (0 = unlimited)
-	APIKeyHeader   string           // Header for API key (default: X-API-Key)
+	TargetURL        string            // Backend vLLM service URL (e.g., http://localhost:8000)
+	AuthProvider     AuthProvider      // Custom auth provider
+	AccessController AccessController  // Optional access control (Phase 2)
+	QuotaManager     *TokenQuotaManager // Optional token quota manager (Phase 2b)
+	ModelRouter      *ModelRouter      // Optional model router for multi-model backends (Phase 3)
+	AuditLogger      audit.AuditLogger  // Audit logger
+	RequestsPerMin   float64           // Rate limit: requests per minute (0 = unlimited)
+	APIKeyHeader     string            // Header for API key (default: X-API-Key)
 }
 
 // NewGateway creates a new reverse proxy gateway
@@ -66,12 +73,15 @@ func NewGateway(config GatewayConfig) (*Gateway, error) {
 	}
 
 	gw := &Gateway{
-		targetURL:      target,
-		authProvider:   config.AuthProvider,
-		auditLogger:    config.AuditLogger,
-		rateLimiter:    &RateLimiter{limits: make(map[string]*UserRateLimit)},
-		requestsPerMin: config.RequestsPerMin,
-		APIKeyHeader:   apiKeyHeader,
+		targetURL:        target,
+		authProvider:     config.AuthProvider,
+		accessController: config.AccessController,
+		quotaManager:     config.QuotaManager,
+		modelRouter:      config.ModelRouter,
+		auditLogger:      config.AuditLogger,
+		rateLimiter:      &RateLimiter{limits: make(map[string]*UserRateLimit)},
+		requestsPerMin:   config.RequestsPerMin,
+		APIKeyHeader:     apiKeyHeader,
 	}
 
 	// Create reverse proxy with custom director
@@ -85,13 +95,30 @@ func NewGateway(config GatewayConfig) (*Gateway, error) {
 
 // director modifies the request before forwarding to backend
 func (gw *Gateway) director(req *http.Request) {
-	req.URL.Scheme = gw.targetURL.Scheme
-	req.URL.Host = gw.targetURL.Host
-	req.URL.Path = singleJoiningSlash(gw.targetURL.Path, req.URL.Path)
-	if gw.targetURL.RawQuery == "" || req.URL.RawQuery == "" {
-		req.URL.RawQuery = gw.targetURL.RawQuery + req.URL.RawQuery
+	// Determine target URL based on model router (Phase 3)
+	targetURL := gw.targetURL
+
+	// If model router is enabled, check for model-based routing
+	if gw.modelRouter != nil {
+		modelName := extractModelNameFromPath(req.URL.Path)
+		if modelName != "" {
+			if backend, exists := gw.modelRouter.GetBackend(modelName); exists {
+				// Route to model-specific backend
+				u, _ := url.Parse(backend.URL)
+				targetURL = u
+				// Strip the /models/{model-name} prefix from the path
+				req.URL.Path = stripModelPrefixFromPath(req.URL.Path, modelName)
+			}
+		}
+	}
+
+	req.URL.Scheme = targetURL.Scheme
+	req.URL.Host = targetURL.Host
+	req.URL.Path = singleJoiningSlash(targetURL.Path, req.URL.Path)
+	if targetURL.RawQuery == "" || req.URL.RawQuery == "" {
+		req.URL.RawQuery = targetURL.RawQuery + req.URL.RawQuery
 	} else {
-		req.URL.RawQuery = gw.targetURL.RawQuery + "&" + req.URL.RawQuery
+		req.URL.RawQuery = targetURL.RawQuery + "&" + req.URL.RawQuery
 	}
 
 	// Remove authorization headers from being forwarded
@@ -121,6 +148,11 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	clientIP := getClientIP(r)
 	userAgent := r.Header.Get("User-Agent")
 
+	// Record request (Phase 4 metrics)
+	if gw.Metrics != nil {
+		gw.Metrics.RecordRequest()
+	}
+
 	// Extract API key
 	apiKey := r.Header.Get(gw.APIKeyHeader)
 	if apiKey == "" && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
@@ -135,7 +167,37 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		userID, err = gw.authProvider.ValidateToken(apiKey)
 		if err != nil {
 			gw.auditLogger.LogAuthFailure(apiKey[:min(len(apiKey), 8)]+"...", r.RequestURI, clientIP, err.Error())
+			if gw.Metrics != nil {
+				gw.Metrics.RecordAuthFailure("invalid_key")
+			}
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	// Extract model name from request if available (needed for access control)
+	modelName := extractModelName(r)
+
+	// Check access control (Phase 2)
+	if gw.accessController != nil && userID != "" {
+		if !gw.accessController.CanAccess(userID, modelName) {
+			gw.auditLogger.LogError(userID, r.RequestURI, correlationID, fmt.Sprintf("access denied to model: %s", modelName), http.StatusForbidden, clientIP)
+			if gw.Metrics != nil {
+				gw.Metrics.RecordAccessDenied(userID)
+			}
+			http.Error(w, fmt.Sprintf(`{"error":"access denied","model":"%s"}`, modelName), http.StatusForbidden)
+			return
+		}
+	}
+
+	// Check token quota (Phase 2b)
+	if gw.quotaManager != nil && userID != "" {
+		if err := gw.quotaManager.CheckQuota(userID); err != nil {
+			gw.auditLogger.LogError(userID, r.RequestURI, correlationID, fmt.Sprintf("token quota exceeded: %v", err), http.StatusTooManyRequests, clientIP)
+			if gw.Metrics != nil {
+				gw.Metrics.RecordTokenQuotaExceeded()
+			}
+			http.Error(w, fmt.Sprintf(`{"error":"token_quota_exceeded","detail":"%s"}`, err.Error()), http.StatusTooManyRequests)
 			return
 		}
 	}
@@ -143,6 +205,9 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Check rate limit
 	if gw.requestsPerMin > 0 && !gw.rateLimiter.Allow(userID, gw.requestsPerMin) {
 		gw.auditLogger.LogError(userID, r.RequestURI, correlationID, "rate limit exceeded", http.StatusTooManyRequests, clientIP)
+		if gw.Metrics != nil {
+			gw.Metrics.RecordRateLimitHit()
+		}
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
@@ -161,9 +226,6 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 	}
 
-	// Extract model name from request if available
-	modelName := extractModelName(r)
-
 	// Log request
 	gw.auditLogger.LogRequest(userID, modelName, r.RequestURI, r.Method, clientIP, userAgent, correlationID, int64(len(requestBody)))
 
@@ -175,6 +237,13 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Calculate request duration
 	duration := time.Since(startTime).Milliseconds()
+
+	// Record metrics (Phase 4)
+	if gw.Metrics != nil {
+		gw.Metrics.RecordRequestComplete(wrappedWriter.statusCode, r.Method, userID, modelName)
+		gw.Metrics.RecordLatency(modelName, duration)
+		// Note: Token recording would require parsing response body, handled separately if needed
+	}
 
 	// Log response
 	if wrappedWriter.statusCode < 400 {
@@ -301,6 +370,32 @@ func extractModelName(r *http.Request) string {
 
 func generateCorrelationID() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Nanosecond())
+}
+
+// extractModelNameFromPath extracts model name from paths like /models/{model-name}/v1/...
+// Used for Phase 3 multi-model routing
+func extractModelNameFromPath(path string) string {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) > 1 && parts[0] == "models" {
+		// Return the model name (next part after "models")
+		return parts[1]
+	}
+	return ""
+}
+
+// stripModelPrefixFromPath removes the /models/{model-name} prefix from a path
+// e.g., /models/mistral-7b/v1/chat/completions → /v1/chat/completions
+func stripModelPrefixFromPath(path, modelName string) string {
+	prefix := "/models/" + modelName
+	if strings.HasPrefix(path, prefix) {
+		// Return path without the prefix, ensuring it starts with /
+		remainder := strings.TrimPrefix(path, prefix)
+		if !strings.HasPrefix(remainder, "/") {
+			remainder = "/" + remainder
+		}
+		return remainder
+	}
+	return path
 }
 
 func min(a, b int) int {
