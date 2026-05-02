@@ -14,7 +14,7 @@ Phase 8 extends the SovereignStack management service with HTTP endpoints for us
 
 ## API Endpoints
 
-### 1. GET `/api/users`
+### 1. GET `/api/v1/users`
 
 **Purpose:** List all users (admin-only)
 
@@ -49,7 +49,7 @@ Phase 8 extends the SovereignStack management service with HTTP endpoints for us
 
 ---
 
-### 2. GET `/api/users/{id}`
+### 2. GET `/api/v1/users/{id}`
 
 **Purpose:** Get single user profile (public, no auth required)
 
@@ -76,7 +76,7 @@ Phase 8 extends the SovereignStack management service with HTTP endpoints for us
 
 ---
 
-### 3. POST `/api/users/{id}/models/{model}`
+### 3. POST `/api/v1/users/{id}/models/{model}`
 
 **Purpose:** Grant model access to user (admin-only)
 
@@ -101,7 +101,7 @@ Phase 8 extends the SovereignStack management service with HTTP endpoints for us
 
 ---
 
-### 4. DELETE `/api/users/{id}/models/{model}`
+### 4. DELETE `/api/v1/users/{id}/models/{model}`
 
 **Purpose:** Revoke model access from user (admin-only)
 
@@ -124,7 +124,7 @@ Phase 8 extends the SovereignStack management service with HTTP endpoints for us
 
 ---
 
-### 5. PATCH `/api/users/{id}/quota`
+### 5. PATCH `/api/v1/users/{id}/quota`
 
 **Purpose:** Update user token quotas (admin-only)
 
@@ -160,7 +160,7 @@ Phase 8 extends the SovereignStack management service with HTTP endpoints for us
 
 ---
 
-### 6. GET `/api/access/check?user={id}&model={model}`
+### 6. GET `/api/v1/access/check?user={id}&model={model}`
 
 **Purpose:** Check if user can access model (public)
 
@@ -223,30 +223,30 @@ func (ks *KeyStore) CanAccess(id, model string) bool
 - `--admin-key` — Admin API key for user management operations
 
 **New handlers:**
-- `handleUsers()` — Routes all `/api/users*` requests
-- `handleAccessCheck()` — Routes `/api/access/check` requests
+- `handleUsers()` — Routes all `/api/v1/users*` requests
+- `handleAccessCheck()` — Routes `/api/v1/access/check` requests
 - `checkAdminAuth()` — Validates admin API key in Authorization header
 
 ### Handler Logic
 
 ```
-POST /api/users/{id}/models/{model}
+POST /api/v1/users/{id}/models/{model}
   → GrantModelAccess(id, model)
   → Save keys.json
   → Return 200
 
-DELETE /api/users/{id}/models/{model}
+DELETE /api/v1/users/{id}/models/{model}
   → RevokeModelAccess(id, model)
   → Save keys.json
   → Return 200
 
-PATCH /api/users/{id}/quota
+PATCH /api/v1/users/{id}/quota
   → DecodeJSON request body
   → SetQuota(id, dailyLimit, monthlyLimit)
   → Save keys.json
   → Return 200
 
-GET /api/access/check?user={id}&model={model}
+GET /api/v1/access/check?user={id}&model={model}
   → CanAccess(id, model)
   → Return 200/403 (no auth required)
 ```
@@ -275,10 +275,10 @@ Authorization: Bearer sk_admin_secret_xyz
 ### Public Operations
 
 These operations do NOT require authentication:
-- `GET /api/models/running` (list running models)
-- `GET /api/health` (health check)
-- `GET /api/users/{id}` (read user profile)
-- `GET /api/access/check` (check access policy)
+- `GET /api/v1/models/running` (list running models)
+- `GET /api/v1/health` (health check)
+- `GET /api/v1/users/{id}` (read user profile)
+- `GET /api/v1/access/check` (check access policy)
 
 ---
 
@@ -288,7 +288,7 @@ These operations do NOT require authentication:
 
 ```bash
 curl -H "Authorization: Bearer sk_admin_xyz" \
-  http://localhost:8888/api/users | jq
+  http://localhost:8888/api/v1/users | jq
 ```
 
 ### Grant Model Access
@@ -296,7 +296,7 @@ curl -H "Authorization: Bearer sk_admin_xyz" \
 ```bash
 curl -X POST \
   -H "Authorization: Bearer sk_admin_xyz" \
-  http://localhost:8888/api/users/alice/models/mistral-7b
+  http://localhost:8888/api/v1/users/alice/models/mistral-7b
 ```
 
 ### Revoke Model Access
@@ -304,7 +304,7 @@ curl -X POST \
 ```bash
 curl -X DELETE \
   -H "Authorization: Bearer sk_admin_xyz" \
-  http://localhost:8888/api/users/alice/models/mistral-7b
+  http://localhost:8888/api/v1/users/alice/models/mistral-7b
 ```
 
 ### Update Token Quota
@@ -314,13 +314,13 @@ curl -X PATCH \
   -H "Authorization: Bearer sk_admin_xyz" \
   -H "Content-Type: application/json" \
   -d '{"max_tokens_per_day":500000,"max_tokens_per_month":10000000}' \
-  http://localhost:8888/api/users/alice/quota
+  http://localhost:8888/api/v1/users/alice/quota
 ```
 
 ### Check Access
 
 ```bash
-curl http://localhost:8888/api/access/check?user=alice&model=mistral-7b | jq
+curl http://localhost:8888/api/v1/access/check?user=alice&model=mistral-7b | jq
 # Returns: {"user":"alice","model":"mistral-7b","allowed":true}
 ```
 
@@ -331,14 +331,14 @@ curl http://localhost:8888/api/access/check?user=alice&model=mistral-7b | jq
 ### Platform Backend
 
 Platform backend can now:
-1. Query user list via `GET /api/users`
-2. Manage quotas via `PATCH /api/users/{id}/quota`
-3. Audit access via `GET /api/access/check`
+1. Query user list via `GET /api/v1/users`
+2. Manage quotas via `PATCH /api/v1/users/{id}/quota`
+3. Audit access via `GET /api/v1/access/check`
 
 ```go
 // Example: Update quota from platform backend
 resp, _ := http.Post(
-  "http://localhost:8888/api/users/alice/quota",
+  "http://localhost:8888/api/v1/users/alice/quota",
   "application/json",
   bytes.NewBufferString(`{"max_tokens_per_day":500000}`),
 )
@@ -348,7 +348,7 @@ resp, _ := http.Post(
 ### Platform Frontend
 
 Frontend API Keys screen can:
-1. List users via `GET /api/users` (with auth)
+1. List users via `GET /api/v1/users` (with auth)
 2. Grant/revoke models via POST/DELETE (with auth)
 3. Update quotas via PATCH (with auth)
 
@@ -359,7 +359,7 @@ Frontend API Keys screen can:
 ```
 User clicks "Grant model access" in web UI
   ↓
-Frontend calls PATCH /api/users/{id}/models/{model}
+Frontend calls PATCH /api/v1/users/{id}/models/{model}
   (with admin-key Bearer token)
   ↓
 Platform Backend → Management Service
@@ -403,16 +403,16 @@ Manual tests with curl:
 sovstack management --port 8888 --admin-key sk_admin_secret
 
 # 2. In another terminal, test endpoints
-curl http://localhost:8888/api/health
+curl http://localhost:8888/api/v1/health
 
 curl -H "Authorization: Bearer sk_admin_secret" \
-  http://localhost:8888/api/users
+  http://localhost:8888/api/v1/users
 
 curl -X POST \
   -H "Authorization: Bearer sk_admin_secret" \
-  http://localhost:8888/api/users/alice/models/mistral-7b
+  http://localhost:8888/api/v1/users/alice/models/mistral-7b
 
-curl http://localhost:8888/api/access/check?user=alice&model=mistral-7b
+curl http://localhost:8888/api/v1/access/check?user=alice&model=mistral-7b
 ```
 
 ---
@@ -484,11 +484,11 @@ All endpoints return JSON error responses:
 
 **Phase 7 Frontend Can Now:**
 1. Implement API Keys management screen
-2. Call `GET /api/users` to list users
+2. Call `GET /api/v1/users` to list users
 3. Call POST/DELETE to manage model access
 4. Call PATCH to update quotas
 
 **Platform Integration:**
-- Gateway can call `GET /api/access/check` for pre-proxy validation
+- Gateway can call `GET /api/v1/access/check` for pre-proxy validation
 - Platform backend can enumerate users and quotas
 - Platform frontend has full user management UI

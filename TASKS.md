@@ -52,7 +52,7 @@ Mark tasks `[x]` when complete. Tasks within the same phase with no listed depen
 Replace `downloadFromHuggingFace()` in `core/model/cache.go` with a real implementation using the Hugging Face HTTP API. Do not use Python, `git lfs`, or external CLI tools. Pure Go using standard library + HTTP.
 
 The Hugging Face API works like this:
-1. Fetch model file list: `GET https://huggingface.co/api/models/{model_id}`
+1. Fetch model file list: `GET https://huggingface.co/api/v1/models/{model_id}`
    - Response includes a `siblings` array where each entry has a `rfilename` field (the file path)
 2. Download each file: `GET https://huggingface.co/{model_id}/resolve/main/{rfilename}`
    - Stream the response body to disk, showing download progress
@@ -386,7 +386,7 @@ func (l *SQLiteLogger) GetStats() map[string]interface{}
 
 **Acceptance criteria:**
 - [ ] Audit logs persist to SQLite after gateway restarts
-- [ ] `GET /api/audit/logs` returns logs from SQLite
+- [ ] `GET /api/v1/audit/logs` returns logs from SQLite
 - [ ] Logs survive a gateway restart
 - [ ] AES-256 encryption verified (raw SQLite file has no plaintext request bodies)
 - [ ] Binary stays single-file (no CGO, uses `modernc.org/sqlite`)
@@ -760,7 +760,7 @@ type SystemSnapshot struct {
 - [ ] GPU metrics collected every 15 seconds and stored to SQLite
 - [ ] Inference metrics scraped from vLLM `/metrics` endpoint
 - [ ] Metrics survive gateway restarts (persistent SQLite)
-- [ ] `GET /api/visibility/metrics?hours=24` returns time series data
+- [ ] `GET /api/v1/visibility/metrics?hours=24` returns time series data
 
 ---
 
@@ -826,7 +826,7 @@ func CalculateCostReport(store TimeSeriesStore, period time.Duration,
 - Estimate electricity cost: GPU TDP × hours × electricity rate (configurable, default $0.12/kWh)
 - Amortize hardware cost: `--hardware-cost` flag (e.g., "$5000") amortized over 3 years
 
-**API endpoint:** `GET /api/visibility/costs?period=30d`
+**API endpoint:** `GET /api/v1/visibility/costs?period=30d`
 ```json
 {
   "period": "last_30_days",
@@ -843,7 +843,7 @@ func CalculateCostReport(store TimeSeriesStore, period time.Duration,
 ```
 
 **Acceptance criteria:**
-- [ ] `GET /api/visibility/costs` returns a cost report
+- [ ] `GET /api/v1/visibility/costs` returns a cost report
 - [ ] Cost calculation uses real token counts from the metrics store
 - [ ] Hardware/electricity cost is configurable
 - [ ] Pricing table is updateable without code changes (JSON config file)
@@ -906,14 +906,14 @@ type TeamUsage struct {
 ```
 
 **API endpoints:**
-- `GET /api/visibility/usage?period=7d` — full usage report
-- `GET /api/visibility/usage/users` — per-user breakdown
-- `GET /api/visibility/usage/teams` — per-team breakdown  
-- `GET /api/visibility/usage/models` — per-model breakdown
+- `GET /api/v1/visibility/usage?period=7d` — full usage report
+- `GET /api/v1/visibility/usage/users` — per-user breakdown
+- `GET /api/v1/visibility/usage/teams` — per-team breakdown  
+- `GET /api/v1/visibility/usage/models` — per-model breakdown
 
 **Acceptance criteria:**
 - [ ] Usage is attributed to users and teams correctly
-- [ ] `GET /api/visibility/usage` returns accurate counts from audit log
+- [ ] `GET /api/v1/visibility/usage` returns accurate counts from audit log
 - [ ] Peak hour analysis shows busiest times of day
 - [ ] Unused model detection: models deployed but with 0 requests in 7 days
 
@@ -1009,13 +1009,13 @@ var DefaultRules = []AnomalyRule{
 
 Run anomaly checks every 5 minutes. Store triggered anomalies in SQLite.
 
-**API endpoint:** `GET /api/visibility/security/anomalies?period=24h`
+**API endpoint:** `GET /api/v1/visibility/security/anomalies?period=24h`
 
 **Acceptance criteria:**
 - [ ] Volume spike rule triggers correctly in tests
 - [ ] Auth failure burst rule triggers on 5+ failures from same IP in 5 min
 - [ ] Anomalies are stored and queryable
-- [ ] `GET /api/visibility/security/anomalies` returns recent anomalies with severity
+- [ ] `GET /api/v1/visibility/security/anomalies` returns recent anomalies with severity
 
 ---
 
@@ -1034,18 +1034,18 @@ New file: `visibility/api/server.go`
 Single HTTP server with these endpoints:
 
 ```
-GET  /api/health                           — liveness check
-GET  /api/visibility/metrics?hours=24      — operational metrics time series
-GET  /api/visibility/costs?period=30d      — financial comparison
-GET  /api/visibility/usage?period=7d       — usage analytics
-GET  /api/visibility/usage/users           — per-user breakdown
-GET  /api/visibility/usage/teams           — per-team breakdown
-GET  /api/visibility/usage/models          — per-model breakdown  
-GET  /api/visibility/security/anomalies    — security events
-GET  /api/visibility/nodes                 — all deployed nodes status
-GET  /api/audit/logs?n=100&user=alice      — raw audit log query
-GET  /api/audit/stats                      — aggregate audit statistics
-POST /api/visibility/report                — trigger report generation
+GET  /api/v1/health                           — liveness check
+GET  /api/v1/visibility/metrics?hours=24      — operational metrics time series
+GET  /api/v1/visibility/costs?period=30d      — financial comparison
+GET  /api/v1/visibility/usage?period=7d       — usage analytics
+GET  /api/v1/visibility/usage/users           — per-user breakdown
+GET  /api/v1/visibility/usage/teams           — per-team breakdown
+GET  /api/v1/visibility/usage/models          — per-model breakdown  
+GET  /api/v1/visibility/security/anomalies    — security events
+GET  /api/v1/visibility/nodes                 — all deployed nodes status
+GET  /api/v1/audit/logs?n=100&user=alice      — raw audit log query
+GET  /api/v1/audit/stats                      — aggregate audit statistics
+POST /api/v1/visibility/report                — trigger report generation
 ```
 
 New CLI command:
@@ -1059,7 +1059,7 @@ Starts the visibility API server. Designed to run alongside the gateway.
 
 **Acceptance criteria:**
 - [ ] All endpoints return valid JSON
-- [ ] `GET /api/health` returns 200 with `{"status": "ok"}`
+- [ ] `GET /api/v1/health` returns 200 with `{"status": "ok"}`
 - [ ] Endpoints are protected by API key auth
 - [ ] `sovstack visibility` command starts the server
 - [ ] Server is documented with inline comments describing each endpoint

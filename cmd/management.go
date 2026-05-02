@@ -3,8 +3,10 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,22 +15,33 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gayanclife/sovereignstack/core/health"
 	"github.com/gayanclife/sovereignstack/core/keys"
+	"github.com/gayanclife/sovereignstack/core/logging"
+	"github.com/gayanclife/sovereignstack/core/management/discovery"
+	"github.com/gayanclife/sovereignstack/core/management/metricsproxy"
+	policymgmt "github.com/gayanclife/sovereignstack/core/management/policy"
 	"github.com/gayanclife/sovereignstack/internal/docker"
 	"github.com/spf13/cobra"
+)
+
+// Phase E: shared instances used by the legacy `management` shim.
+var (
+	discoverySvc    = discovery.New()
+	metricsproxySvc = metricsproxy.New()
 )
 
 var managementCmd = &cobra.Command{
 	Use:   "management",
 	Short: "Start the management API server for system monitoring",
 	Long: `Start the SovereignStack management API that provides:
-- /api/models/running - List all running models
-- /api/health - Health check
-- /api/users - User management (requires admin key)
-- /api/users/{id} - User profile management
-- /api/users/{id}/models/{model} - Model access control
-- /api/access/check - Check model access
-- /api/models/{name}/metrics - Proxy vLLM Prometheus metrics for a specific model
+- /api/v1/models/running - List all running models
+- /api/v1/health - Health check
+- /api/v1/users - User management (requires admin key)
+- /api/v1/users/{id} - User profile management
+- /api/v1/users/{id}/models/{model} - Model access control
+- /api/v1/access/check - Check model access
+- /api/v1/models/{name}/metrics - Proxy vLLM Prometheus metrics for a specific model
 
 This server is designed to be queried by the Visibility Platform (commercial monitoring solution).
 
@@ -58,23 +71,42 @@ type ModelResponse struct {
 	StartedAt   string `json:"started_at,omitempty"`
 }
 
-// RunningModelsResponse is the API response for /api/models/running
+// RunningModelsResponse is the API response for /api/v1/models/running
 type RunningModelsResponse struct {
 	Version string           `json:"version"`
 	Models  []ModelResponse  `json:"models"`
 	Count   int              `json:"count"`
 }
 
-// HealthResponse is the API response for /api/health
+// HealthResponse is the API response for /api/v1/health
 type HealthResponse struct {
 	Status string `json:"status"`
 	Ready  bool   `json:"ready"`
 }
 
 func runManagement(cmd *cobra.Command, args []string) error {
-	port, _ := cmd.Flags().GetInt("port")
-	keysPath, _ := cmd.Flags().GetString("keys")
-	adminKey, _ = cmd.Flags().GetString("admin-key")
+	cfg, err := loadConfig(cmd)
+	if err != nil {
+		return err
+	}
+	if _, err := logging.Init(cfg.Log); err != nil {
+		return err
+	}
+	log := logging.Service("management")
+
+	port := cfg.Management.Port
+	if cmd.Flags().Changed("port") {
+		port, _ = cmd.Flags().GetInt("port")
+	}
+	keysPath := cfg.Management.KeysFile
+	if cmd.Flags().Changed("keys") {
+		keysPath, _ = cmd.Flags().GetString("keys")
+	}
+	if cmd.Flags().Changed("admin-key") {
+		adminKey, _ = cmd.Flags().GetString("admin-key")
+	} else {
+		adminKey = cfg.Management.AdminKey
+	}
 
 	// Load KeyStore
 	if keysPath == "" {
@@ -82,42 +114,67 @@ func runManagement(cmd *cobra.Command, args []string) error {
 		keysPath = filepath.Join(home, ".sovereignstack", "keys.json")
 	}
 
-	var err error
 	keyStore, err = keys.LoadKeyStore(keysPath)
 	if err != nil {
 		return fmt.Errorf("failed to load keys: %w", err)
 	}
 
 	listenAddr := fmt.Sprintf(":%d", port)
-	fmt.Printf("🔧 Starting SovereignStack Management API\n")
-	fmt.Printf("  Listening: %s\n", listenAddr)
-	fmt.Printf("  Keys file: %s\n", keysPath)
-	fmt.Printf("  Endpoints:\n")
-	fmt.Printf("    - GET /api/models/running\n")
-	fmt.Printf("    - GET /api/health\n")
-	fmt.Printf("    - GET /api/users\n")
-	fmt.Printf("    - GET /api/users/{id}\n")
-	fmt.Printf("    - POST /api/users/{id}/models/{model}\n")
-	fmt.Printf("    - DELETE /api/users/{id}/models/{model}\n")
-	fmt.Printf("    - PATCH /api/users/{id}/quota\n")
-	fmt.Printf("    - GET /api/access/check?user={id}&model={model}\n")
-	fmt.Printf("    - GET /api/models/{name}/metrics\n")
-	fmt.Printf("\nPress Ctrl+C to stop\n\n")
 
-	// Setup HTTP handlers
-	http.HandleFunc("/api/models/running", handleRunningModels)
-	http.HandleFunc("/api/models/", handleModelEndpoints)
-	http.HandleFunc("/api/health", handleHealth)
-	http.HandleFunc("/api/users", handleUsers)
-	http.HandleFunc("/api/access/check", handleAccessCheck)
+	// Structured startup event.
+	log.Info("management starting",
+		slog.String("listen", listenAddr),
+		slog.String("keys_file", keysPath),
+		slog.Bool("admin_auth_enabled", adminKey != ""),
+	)
+
+	if cfg.Log.Format != "json" {
+		fmt.Printf("🔧 Starting SovereignStack Management API\n")
+		fmt.Printf("  Listening: %s\n", listenAddr)
+		fmt.Printf("  Keys file: %s\n", keysPath)
+		fmt.Printf("  Endpoints:\n")
+		fmt.Printf("    - GET /api/v1/models/running\n")
+		fmt.Printf("    - GET /api/v1/health\n")
+		fmt.Printf("    - GET /api/v1/users\n")
+		fmt.Printf("    - GET /api/v1/users/{id}\n")
+		fmt.Printf("    - POST /api/v1/users/{id}/models/{model}\n")
+		fmt.Printf("    - DELETE /api/v1/users/{id}/models/{model}\n")
+		fmt.Printf("    - PATCH /api/v1/users/{id}/quota\n")
+		fmt.Printf("    - GET /api/v1/access/check?user={id}&model={model}\n")
+		fmt.Printf("    - GET /api/v1/models/{name}/metrics\n")
+		fmt.Printf("\nPress Ctrl+C to stop\n\n")
+	}
+
+	// Phase E: the management binary now mounts all three split-out
+	// subservices (discovery + policy + metrics-proxy) on the same port.
+	// New deployments should run them as separate binaries; this monolith
+	// remains as a backward-compatibility shim. Emits a deprecation warning.
+	log.Warn("`sovstack management` is deprecated; prefer `sovstack discovery`, `sovstack policy`, `sovstack metrics-proxy`")
+
+	mgmtMux := http.NewServeMux()
+	discoverySvc.Register(mgmtMux)
+	policySvc := policymgmt.New(keyStore, adminKey)
+	policySvc.Register(mgmtMux)
+	metricsproxySvc.Register(mgmtMux)
+
+	// Health probes (Phase A5)
+	healthChecker := health.New()
+	healthChecker.Register("keystore", func(ctx context.Context) error {
+		if keyStore == nil {
+			return errors.New("keystore not loaded")
+		}
+		return nil
+	})
+	mgmtMux.HandleFunc("/healthz", healthChecker.LivenessHandler())
+	mgmtMux.HandleFunc("/readyz", healthChecker.ReadinessHandler())
 
 	// Setup graceful shutdown
-	server := &http.Server{Addr: listenAddr}
+	server := &http.Server{Addr: listenAddr, Handler: mgmtMux}
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
-		fmt.Printf("\n\n✓ Shutting down gracefully...\n")
+		log.Info("shutting down gracefully")
 		server.Close()
 	}()
 
@@ -173,18 +230,18 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 // vllmMetricsClient is a shared HTTP client for vLLM metrics scraping.
 var vllmMetricsClient = &http.Client{Timeout: 5 * time.Second}
 
-// handleModelEndpoints routes /api/models/{name}/... requests.
-// Currently supports: /api/models/{name}/metrics
+// handleModelEndpoints routes /api/v1/models/{name}/... requests.
+// Currently supports: /api/v1/models/{name}/metrics
 func handleModelEndpoints(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	// Expect: api/models/{name}/metrics
-	if len(parts) < 4 {
+	// Expect: api/v1/models/{name}/metrics → 5 parts
+	if len(parts) < 5 {
 		http.Error(w, `{"error":"invalid path"}`, http.StatusBadRequest)
 		return
 	}
 
-	modelName := parts[2]
-	subPath := parts[3]
+	modelName := parts[3]
+	subPath := parts[4]
 
 	switch subPath {
 	case "metrics":
@@ -195,7 +252,7 @@ func handleModelEndpoints(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleModelMetrics proxies the vLLM /metrics endpoint for a running model.
-// GET /api/models/{name}/metrics → fetches http://localhost:{port}/metrics
+// GET /api/v1/models/{name}/metrics → fetches http://localhost:{port}/metrics
 func handleModelMetrics(w http.ResponseWriter, r *http.Request, modelName string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -259,25 +316,28 @@ func checkAdminAuth(r *http.Request) bool {
 	return auth == expected
 }
 
-// handleUsers handles GET /api/users and user-specific operations.
+// handleUsers handles GET /api/v1/users and user-specific operations.
+//
+// Path layout after Split("/"):
+//   /api/v1/users          → parts = ["", "api", "v1", "users"]                       (len 4)
+//   /api/v1/users/{id}     → parts = ["", "api", "v1", "users", "{id}"]               (len 5)
+//   /api/v1/users/{id}/models/{model} → parts = [..., "models", "{model}"]            (len 7)
+//   /api/v1/users/{id}/quota          → parts = [..., "quota"]                        (len 6)
 func handleUsers(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Extract user ID from path: /api/users/{id} or /api/users/{id}/models/{model}
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 4 {
 		http.Error(w, `{"error":"invalid path"}`, http.StatusBadRequest)
 		return
 	}
 
-	userID := parts[3]
-	if userID == "" {
-		// GET /api/users — list all users
+	// Bare /api/v1/users (no user id) — list-all endpoint.
+	if len(parts) == 4 || (len(parts) == 5 && parts[4] == "") {
 		if r.Method != http.MethodGet {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
 		}
-
 		if !checkAdminAuth(r) {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -291,15 +351,16 @@ func handleUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	userID := parts[4]
 	user, _ := keyStore.GetByID(userID)
 	if user == nil {
 		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
 		return
 	}
 
-	// Check for model operations: /api/users/{id}/models/{model}
-	if len(parts) >= 6 && parts[4] == "models" {
-		model := parts[5]
+	// Check for model operations: /api/v1/users/{id}/models/{model}
+	if len(parts) >= 7 && parts[5] == "models" {
+		model := parts[6]
 
 		if !checkAdminAuth(r) {
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
@@ -339,8 +400,8 @@ func handleUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for quota operations: /api/users/{id}/quota
-	if len(parts) >= 5 && parts[4] == "quota" {
+	// Check for quota operations: /api/v1/users/{id}/quota
+	if len(parts) >= 6 && parts[5] == "quota" {
 		if r.Method != http.MethodPatch {
 			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 			return
@@ -375,7 +436,7 @@ func handleUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GET /api/users/{id} — get user profile
+	// GET /api/v1/users/{id} — get user profile
 	if r.Method == http.MethodGet {
 		json.NewEncoder(w).Encode(user)
 		return
@@ -384,7 +445,7 @@ func handleUsers(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
 }
 
-// handleAccessCheck handles GET /api/access/check?user={id}&model={model}
+// handleAccessCheck handles GET /api/v1/access/check?user={id}&model={model}
 func handleAccessCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 

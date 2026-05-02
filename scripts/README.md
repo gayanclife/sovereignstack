@@ -66,12 +66,12 @@ Starting Management API Container
 🎉 Management API is running!
 
 Endpoints:
-  Health:        http://localhost:8888/api/health
-  Running Models: http://localhost:8888/api/models/running
+  Health:        http://localhost:8888/api/v1/health
+  Running Models: http://localhost:8888/api/v1/models/running
 
 Test it:
-  curl http://localhost:8888/api/health
-  curl http://localhost:8888/api/models/running | jq .
+  curl http://localhost:8888/api/v1/health
+  curl http://localhost:8888/api/v1/models/running | jq .
 ```
 
 **Aliases (Optional)**
@@ -116,8 +116,8 @@ chmod +x scripts/start-management.sh
 ./scripts/start-management.sh --status
 
 # Option B: Direct commands
-curl http://localhost:8888/api/health
-curl http://localhost:8888/api/models/running | jq .
+curl http://localhost:8888/api/v1/health
+curl http://localhost:8888/api/v1/models/running | jq .
 
 # Option C: Docker commands
 docker-compose ps management
@@ -252,7 +252,7 @@ MANAGEMENT_PORT=8888  # → 9999
 ./sovstack deploy distilbert-base-uncased --type cpu
 
 # Management API immediately exposes it
-curl http://localhost:8888/api/models/running
+curl http://localhost:8888/api/v1/models/running
 
 # Visibility platform discovers it automatically
 ```

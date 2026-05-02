@@ -75,10 +75,11 @@ var keysAddCmd = &cobra.Command{
 			return fmt.Errorf("failed to add user: %w", err)
 		}
 
-		fmt.Printf("✓ Created user %q\n", userID)
-		fmt.Printf("  API Key: %s\n", apiKey)
-		fmt.Printf("  Rate Limit: %.0f requests/min\n", rateLimit)
-		return nil
+		return emit(cmd, profile, func() {
+			fmt.Printf("✓ Created user %q\n", userID)
+			fmt.Printf("  API Key: %s\n", apiKey)
+			fmt.Printf("  Rate Limit: %.0f requests/min\n", rateLimit)
+		})
 	},
 }
 
@@ -94,35 +95,36 @@ var keysListCmd = &cobra.Command{
 		}
 
 		users := ks.ListUsers()
-		if len(users) == 0 {
-			fmt.Println("No users found.")
-			return nil
-		}
-
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "USER ID\tDEPARTMENT\tROLE\tMODELS\tDAILY QUOTA\tMONTHLY QUOTA\tLAST USED")
-
-		for _, user := range users {
-			dailyQuota := fmt.Sprintf("%d", user.MaxTokensPerDay)
-			monthlyQuota := fmt.Sprintf("%d", user.MaxTokensPerMonth)
-			if user.MaxTokensPerDay == 0 {
-				dailyQuota = "unlimited"
-			}
-			if user.MaxTokensPerMonth == 0 {
-				monthlyQuota = "unlimited"
+		return emit(cmd, map[string]any{"users": users, "count": len(users)}, func() {
+			if len(users) == 0 {
+				fmt.Println("No users found.")
+				return
 			}
 
-			lastUsed := "never"
-			if !user.LastUsedAt.IsZero() {
-				lastUsed = time.Since(user.LastUsedAt).String() + " ago"
-			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "USER ID\tDEPARTMENT\tROLE\tMODELS\tDAILY QUOTA\tMONTHLY QUOTA\tLAST USED")
 
-			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
-				user.ID, user.Department, user.Role, len(user.AllowedModels),
-				dailyQuota, monthlyQuota, lastUsed)
-		}
-		w.Flush()
-		return nil
+			for _, user := range users {
+				dailyQuota := fmt.Sprintf("%d", user.MaxTokensPerDay)
+				monthlyQuota := fmt.Sprintf("%d", user.MaxTokensPerMonth)
+				if user.MaxTokensPerDay == 0 {
+					dailyQuota = "unlimited"
+				}
+				if user.MaxTokensPerMonth == 0 {
+					monthlyQuota = "unlimited"
+				}
+
+				lastUsed := "never"
+				if !user.LastUsedAt.IsZero() {
+					lastUsed = time.Since(user.LastUsedAt).String() + " ago"
+				}
+
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\t%s\n",
+					user.ID, user.Department, user.Role, len(user.AllowedModels),
+					dailyQuota, monthlyQuota, lastUsed)
+			}
+			w.Flush()
+		})
 	},
 }
 
@@ -143,8 +145,9 @@ var keysRemoveCmd = &cobra.Command{
 			return fmt.Errorf("failed to remove user: %w", err)
 		}
 
-		fmt.Printf("✓ Removed user %q\n", userID)
-		return nil
+		return emit(cmd, map[string]any{"user_id": userID, "removed": true}, func() {
+			fmt.Printf("✓ Removed user %q\n", userID)
+		})
 	},
 }
 
@@ -166,33 +169,34 @@ var keysInfoCmd = &cobra.Command{
 			return fmt.Errorf("user %q not found", userID)
 		}
 
-		fmt.Printf("User: %s\n", user.ID)
-		fmt.Printf("  API Key: %s\n", user.Key)
-		fmt.Printf("  Department: %s\n", user.Department)
-		fmt.Printf("  Team: %s\n", user.Team)
-		fmt.Printf("  Role: %s\n", user.Role)
-		fmt.Printf("  Rate Limit: %.0f requests/min\n", user.RateLimitPerMin)
-		fmt.Printf("  Daily Token Limit: ")
-		if user.MaxTokensPerDay == 0 {
-			fmt.Printf("unlimited\n")
-		} else {
-			fmt.Printf("%d tokens\n", user.MaxTokensPerDay)
-		}
-		fmt.Printf("  Monthly Token Limit: ")
-		if user.MaxTokensPerMonth == 0 {
-			fmt.Printf("unlimited\n")
-		} else {
-			fmt.Printf("%d tokens\n", user.MaxTokensPerMonth)
-		}
-		fmt.Printf("  Allowed Models: ")
-		if len(user.AllowedModels) == 0 {
-			fmt.Printf("(none)\n")
-		} else {
-			fmt.Printf("%s\n", strings.Join(user.AllowedModels, ", "))
-		}
-		fmt.Printf("  Created: %s\n", user.CreatedAt.Format("2006-01-02 15:04:05"))
-		fmt.Printf("  Last Used: %s\n", user.LastUsedAt.Format("2006-01-02 15:04:05"))
-		return nil
+		return emit(cmd, user, func() {
+			fmt.Printf("User: %s\n", user.ID)
+			fmt.Printf("  API Key: %s\n", user.Key)
+			fmt.Printf("  Department: %s\n", user.Department)
+			fmt.Printf("  Team: %s\n", user.Team)
+			fmt.Printf("  Role: %s\n", user.Role)
+			fmt.Printf("  Rate Limit: %.0f requests/min\n", user.RateLimitPerMin)
+			fmt.Printf("  Daily Token Limit: ")
+			if user.MaxTokensPerDay == 0 {
+				fmt.Printf("unlimited\n")
+			} else {
+				fmt.Printf("%d tokens\n", user.MaxTokensPerDay)
+			}
+			fmt.Printf("  Monthly Token Limit: ")
+			if user.MaxTokensPerMonth == 0 {
+				fmt.Printf("unlimited\n")
+			} else {
+				fmt.Printf("%d tokens\n", user.MaxTokensPerMonth)
+			}
+			fmt.Printf("  Allowed Models: ")
+			if len(user.AllowedModels) == 0 {
+				fmt.Printf("(none)\n")
+			} else {
+				fmt.Printf("%s\n", strings.Join(user.AllowedModels, ", "))
+			}
+			fmt.Printf("  Created: %s\n", user.CreatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("  Last Used: %s\n", user.LastUsedAt.Format("2006-01-02 15:04:05"))
+		})
 	},
 }
 
@@ -273,6 +277,42 @@ var keysRevokeModelCmd = &cobra.Command{
 
 		fmt.Printf("✓ Revoked %q access to %q\n", userID, model)
 		return nil
+	},
+}
+
+var keysMigrateHashCmd = &cobra.Command{
+	Use:   "migrate-hash",
+	Short: "Convert plaintext API keys in keys.json to argon2id hashes (Phase C)",
+	Long: `One-time migration that converts every plaintext API key stored in
+keys.json into an argon2id hash. Idempotent — safe to re-run; rows that are
+already hashed are skipped.
+
+Existing keys continue to work for authentication after migration. The
+plaintext is no longer recoverable; if a user has lost their key, issue a
+new one with 'sovstack keys add'.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		keyPath := getKeyStorePath()
+		ks, err := keys.LoadKeyStore(keyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load keys: %w", err)
+		}
+
+		migrated, err := ks.MigrateHashes()
+		if err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+
+		return emit(cmd, map[string]any{
+			"migrated":     migrated,
+			"keys_file":    keyPath,
+			"already_safe": migrated == 0,
+		}, func() {
+			if migrated == 0 {
+				fmt.Println("✓ All keys already hashed — no migration needed.")
+			} else {
+				fmt.Printf("✓ Hashed %d plaintext key(s) in %s\n", migrated, keyPath)
+			}
+		})
 	},
 }
 
@@ -362,6 +402,9 @@ var keysUsageCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(keysCmd)
 
+	// All `sovstack keys ...` subcommands inherit this output-format flag.
+	keysCmd.PersistentFlags().StringP("output", "o", "text", "Output format: text | json")
+
 	keysCmd.AddCommand(keysAddCmd)
 	keysAddCmd.Flags().StringP("department", "d", "", "Department name")
 	keysAddCmd.Flags().StringP("team", "t", "", "Team name")
@@ -374,6 +417,7 @@ func init() {
 	keysCmd.AddCommand(keysGrantModelCmd)
 	keysCmd.AddCommand(keysRevokeModelCmd)
 
+	keysCmd.AddCommand(keysMigrateHashCmd)
 	keysCmd.AddCommand(keysSetQuotaCmd)
 	keysSetQuotaCmd.Flags().Int64P("daily", "d", 0, "Daily token limit (0 = unlimited)")
 	keysSetQuotaCmd.Flags().Int64P("monthly", "m", 0, "Monthly token limit (0 = unlimited)")

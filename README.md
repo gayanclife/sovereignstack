@@ -2,6 +2,14 @@
 
 A CLI tool that automates the deployment of private, production-grade LLM inference servers on bare metal or VPS. Supports both **GPU and CPU deployments** with intelligent hardware-aware model selection.
 
+> **⚠ Breaking changes in the latest build (Phase A — incubating)**
+>
+> - All HTTP API paths are now under `/api/v1/...`. Clients hitting `/api/users`, `/api/models/...`, etc. will get 404. Update your callers — there is no compatibility shim.
+> - All services accept a YAML config file via `--config /path/to/sovstack.yaml`. CLI flags still override; see `sovstack.yaml.example` for every option.
+> - Health probes moved to `/healthz` (liveness) and `/readyz` (readiness). The legacy `/api/v1/health` still works but is deprecated.
+> - Logs are structured (`log/slog`). Use `--log-format json` for log shippers; `text` (default) for interactive use.
+> - CLI commands `keys add | list | info | remove` accept `--output|-o json` for piping into `jq`.
+
 ## Prerequisites
 
 - Ubuntu 20.04+ or similar Linux distribution
@@ -373,10 +381,10 @@ curl -H "X-API-Key: sk_test_123" \
   -d '{"model": "llama-2", "messages": [{"role": "user", "content": "Hello"}]}'
 
 # View audit logs (last 50)
-curl http://localhost:8001/api/audit/logs?n=50
+curl http://localhost:8001/api/v1/audit/logs?n=50
 
 # Get audit statistics
-curl http://localhost:8001/api/audit/stats
+curl http://localhost:8001/api/v1/audit/stats
 ```
 
 ### Adding Custom API Keys

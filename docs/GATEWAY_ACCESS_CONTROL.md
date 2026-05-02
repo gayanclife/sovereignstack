@@ -213,7 +213,7 @@ Access denials are logged to the audit trail:
 ### CLI View
 
 ```bash
-curl http://localhost:8001/api/audit/logs
+curl http://localhost:8001/api/v1/audit/logs
 ```
 
 ### Example Log Entry

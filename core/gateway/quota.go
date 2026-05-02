@@ -3,57 +3,54 @@
 // You may obtain a copy of the License at
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
 
 package gateway
 
 import (
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/gayanclife/sovereignstack/core/keys"
 )
 
-// TokenQuotaManager tracks and enforces per-user token quotas (daily and monthly).
+// TokenQuotaManager tracks and enforces per-user token quotas (daily and monthly)
+// against a pluggable QuotaBackend. The manager itself is stateless — all
+// counter state lives in the backend so swapping memory/sqlite/redis is a
+// configuration change with no code touch.
 type TokenQuotaManager struct {
-	store  *keys.KeyStore
-	daily  map[string]*quotaCounter   // Reset at UTC midnight
-	monthly map[string]*quotaCounter  // Reset on 1st of month
-	mu     sync.RWMutex
+	store   *keys.KeyStore
+	backend QuotaBackend
 }
 
-// quotaCounter tracks token usage within a time window
-type quotaCounter struct {
-	used    int64     // Tokens used in current window
-	resetAt time.Time // When this window resets
-	mu      sync.Mutex
-}
-
-// QuotaUsage represents current quota status for a user
+// QuotaUsage represents current quota status for a user.
 type QuotaUsage struct {
-	UserID           string
-	DailyUsed        int64
-	DailyLimit       int64
-	DailyResetAt     time.Time
-	MonthlyUsed      int64
-	MonthlyLimit     int64
-	MonthlyResetAt   time.Time
-	DailyPercent     float64  // 0-100
-	MonthlyPercent   float64  // 0-100
+	UserID         string
+	DailyUsed      int64
+	DailyLimit     int64
+	DailyResetAt   time.Time
+	MonthlyUsed    int64
+	MonthlyLimit   int64
+	MonthlyResetAt time.Time
+	DailyPercent   float64 // 0-100
+	MonthlyPercent float64 // 0-100
 }
 
-// NewTokenQuotaManager creates a new quota manager backed by a KeyStore.
+// NewTokenQuotaManager creates a manager that reads limits from the KeyStore
+// and tracks usage via the in-memory backend. Equivalent to
+// NewTokenQuotaManagerWithBackend(store, NewMemoryQuotaBackend()).
+//
+// Use NewTokenQuotaManagerWithBackend for SQLite or Redis persistence.
 func NewTokenQuotaManager(store *keys.KeyStore) *TokenQuotaManager {
+	return NewTokenQuotaManagerWithBackend(store, NewMemoryQuotaBackend())
+}
+
+// NewTokenQuotaManagerWithBackend creates a manager backed by the given
+// QuotaBackend implementation. The manager does not take ownership of the
+// backend's lifecycle — call backend.Close() yourself at shutdown.
+func NewTokenQuotaManagerWithBackend(store *keys.KeyStore, backend QuotaBackend) *TokenQuotaManager {
 	return &TokenQuotaManager{
-		store:  store,
-		daily:  make(map[string]*quotaCounter),
-		monthly: make(map[string]*quotaCounter),
+		store:   store,
+		backend: backend,
 	}
 }
 
@@ -71,7 +68,10 @@ func (tq *TokenQuotaManager) CheckQuota(userID string) error {
 
 	// Check daily limit
 	if profile.MaxTokensPerDay > 0 {
-		dailyUsed := tq.getDailyUsed(userID)
+		dailyUsed, err := tq.backend.GetDaily(userID)
+		if err != nil {
+			return fmt.Errorf("read daily quota: %w", err)
+		}
 		if dailyUsed >= profile.MaxTokensPerDay {
 			return fmt.Errorf("daily token quota exceeded: %d/%d", dailyUsed, profile.MaxTokensPerDay)
 		}
@@ -79,7 +79,10 @@ func (tq *TokenQuotaManager) CheckQuota(userID string) error {
 
 	// Check monthly limit
 	if profile.MaxTokensPerMonth > 0 {
-		monthlyUsed := tq.getMonthlyUsed(userID)
+		monthlyUsed, err := tq.backend.GetMonthly(userID)
+		if err != nil {
+			return fmt.Errorf("read monthly quota: %w", err)
+		}
 		if monthlyUsed >= profile.MaxTokensPerMonth {
 			return fmt.Errorf("monthly token quota exceeded: %d/%d", monthlyUsed, profile.MaxTokensPerMonth)
 		}
@@ -90,18 +93,19 @@ func (tq *TokenQuotaManager) CheckQuota(userID string) error {
 
 // Record adds tokens to user's quota counters after a completed request.
 // Called AFTER response received from backend.
+//
+// Errors from the backend are not currently surfaced to the caller — the
+// gateway request has already succeeded by this point, and aborting on
+// quota-write failure would be worse than slight under-counting. Backends
+// log their own errors.
 func (tq *TokenQuotaManager) Record(userID string, inputTokens, outputTokens int64) {
 	if userID == "" {
 		return
 	}
 
 	totalTokens := inputTokens + outputTokens
-
-	// Record daily
-	tq.recordDaily(userID, totalTokens)
-
-	// Record monthly
-	tq.recordMonthly(userID, totalTokens)
+	_ = tq.backend.AddDaily(userID, totalTokens)
+	_ = tq.backend.AddMonthly(userID, totalTokens)
 }
 
 // GetUsage returns current quota status for a user.
@@ -111,8 +115,14 @@ func (tq *TokenQuotaManager) GetUsage(userID string) (*QuotaUsage, error) {
 		return nil, fmt.Errorf("user not found: %s", userID)
 	}
 
-	dailyUsed := tq.getDailyUsed(userID)
-	monthlyUsed := tq.getMonthlyUsed(userID)
+	dailyUsed, err := tq.backend.GetDaily(userID)
+	if err != nil {
+		return nil, fmt.Errorf("read daily quota: %w", err)
+	}
+	monthlyUsed, err := tq.backend.GetMonthly(userID)
+	if err != nil {
+		return nil, fmt.Errorf("read monthly quota: %w", err)
+	}
 
 	usage := &QuotaUsage{
 		UserID:         userID,
@@ -120,8 +130,8 @@ func (tq *TokenQuotaManager) GetUsage(userID string) (*QuotaUsage, error) {
 		DailyLimit:     profile.MaxTokensPerDay,
 		MonthlyUsed:    monthlyUsed,
 		MonthlyLimit:   profile.MaxTokensPerMonth,
-		DailyResetAt:   tq.nextDailyReset(),
-		MonthlyResetAt: tq.nextMonthlyReset(),
+		DailyResetAt:   nextDailyReset(time.Now()),
+		MonthlyResetAt: nextMonthlyReset(time.Now()),
 	}
 
 	// Calculate percentages
@@ -135,106 +145,5 @@ func (tq *TokenQuotaManager) GetUsage(userID string) (*QuotaUsage, error) {
 	return usage, nil
 }
 
-// getDailyUsed returns tokens used today (since last UTC midnight).
-func (tq *TokenQuotaManager) getDailyUsed(userID string) int64 {
-	tq.mu.RLock()
-	counter, exists := tq.daily[userID]
-	tq.mu.RUnlock()
-
-	if !exists {
-		return 0
-	}
-
-	counter.mu.Lock()
-	defer counter.mu.Unlock()
-
-	// Check if counter expired (new day)
-	if time.Now().After(counter.resetAt) {
-		return 0
-	}
-
-	return counter.used
-}
-
-// getMonthlyUsed returns tokens used this month (since 1st of month UTC).
-func (tq *TokenQuotaManager) getMonthlyUsed(userID string) int64 {
-	tq.mu.RLock()
-	counter, exists := tq.monthly[userID]
-	tq.mu.RUnlock()
-
-	if !exists {
-		return 0
-	}
-
-	counter.mu.Lock()
-	defer counter.mu.Unlock()
-
-	// Check if counter expired (new month)
-	if time.Now().After(counter.resetAt) {
-		return 0
-	}
-
-	return counter.used
-}
-
-// recordDaily adds tokens to today's quota counter.
-func (tq *TokenQuotaManager) recordDaily(userID string, tokens int64) {
-	tq.mu.Lock()
-	counter, exists := tq.daily[userID]
-	if !exists {
-		counter = &quotaCounter{
-			resetAt: tq.nextDailyReset(),
-		}
-		tq.daily[userID] = counter
-	}
-	tq.mu.Unlock()
-
-	counter.mu.Lock()
-	defer counter.mu.Unlock()
-
-	// Check if counter expired (new day)
-	if time.Now().After(counter.resetAt) {
-		counter.used = 0
-		counter.resetAt = tq.nextDailyReset()
-	}
-
-	counter.used += tokens
-}
-
-// recordMonthly adds tokens to this month's quota counter.
-func (tq *TokenQuotaManager) recordMonthly(userID string, tokens int64) {
-	tq.mu.Lock()
-	counter, exists := tq.monthly[userID]
-	if !exists {
-		counter = &quotaCounter{
-			resetAt: tq.nextMonthlyReset(),
-		}
-		tq.monthly[userID] = counter
-	}
-	tq.mu.Unlock()
-
-	counter.mu.Lock()
-	defer counter.mu.Unlock()
-
-	// Check if counter expired (new month)
-	if time.Now().After(counter.resetAt) {
-		counter.used = 0
-		counter.resetAt = tq.nextMonthlyReset()
-	}
-
-	counter.used += tokens
-}
-
-// nextDailyReset returns the time of next UTC midnight.
-func (tq *TokenQuotaManager) nextDailyReset() time.Time {
-	now := time.Now().UTC()
-	tomorrow := now.AddDate(0, 0, 1)
-	return time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, time.UTC)
-}
-
-// nextMonthlyReset returns the time of next 1st of month at UTC midnight.
-func (tq *TokenQuotaManager) nextMonthlyReset() time.Time {
-	now := time.Now().UTC()
-	nextMonth := now.AddDate(0, 1, 0)
-	return time.Date(nextMonth.Year(), nextMonth.Month(), 1, 0, 0, 0, 0, time.UTC)
-}
+// Backend exposes the underlying backend for shutdown / inspection.
+func (tq *TokenQuotaManager) Backend() QuotaBackend { return tq.backend }

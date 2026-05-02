@@ -335,7 +335,7 @@ sovstack gateway --keys ~/.sovereignstack/keys.json --port 8001 --audit-db ./aud
 
 5. **Audit Access**
    - Enable audit logging: `--audit-db ./audit.db`
-   - Review `/api/audit/logs` endpoint
+   - Review `/api/v1/audit/logs` endpoint
 
 ---
 
@@ -396,7 +396,7 @@ The gateway has endpoints for audit logging:
 
 ### Get Audit Logs
 ```
-GET /api/audit/logs?n=100
+GET /api/v1/audit/logs?n=100
 ```
 
 Response:
@@ -419,7 +419,7 @@ Response:
 
 ### Get Audit Stats
 ```
-GET /api/audit/stats
+GET /api/v1/audit/stats
 ```
 
 Response:

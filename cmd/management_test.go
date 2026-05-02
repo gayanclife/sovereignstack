@@ -19,7 +19,7 @@ import (
 )
 
 func TestHandleModelEndpoints_InvalidPath(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/models/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models/", nil)
 	w := httptest.NewRecorder()
 
 	handleModelEndpoints(w, req)
@@ -30,7 +30,7 @@ func TestHandleModelEndpoints_InvalidPath(t *testing.T) {
 }
 
 func TestHandleModelEndpoints_UnknownEndpoint(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/models/mistral-7b/unknown", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models/mistral-7b/unknown", nil)
 	w := httptest.NewRecorder()
 
 	handleModelEndpoints(w, req)
@@ -41,7 +41,7 @@ func TestHandleModelEndpoints_UnknownEndpoint(t *testing.T) {
 }
 
 func TestHandleModelMetrics_MethodNotAllowed(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/api/models/mistral-7b/metrics", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/models/mistral-7b/metrics", nil)
 	w := httptest.NewRecorder()
 
 	handleModelMetrics(w, req, "mistral-7b")
@@ -55,7 +55,7 @@ func TestHandleModelMetrics_MethodNotAllowed(t *testing.T) {
 // the running list. This requires Docker to be available; if Docker isn't
 // reachable, the test should still get a 5xx (not a 404), so we accept either.
 func TestHandleModelMetrics_ModelNotRunning(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/models/nonexistent-model-xyz-12345/metrics", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/models/nonexistent-model-xyz-12345/metrics", nil)
 	w := httptest.NewRecorder()
 
 	handleModelMetrics(w, req, "nonexistent-model-xyz-12345")

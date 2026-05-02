@@ -122,8 +122,13 @@ func TestGetByID(t *testing.T) {
 		t.Fatal("GetByID returned nil for existing user")
 	}
 
-	if user.Key != "sk_bob_456" {
-		t.Errorf("Got wrong key: %s", user.Key)
+	// Phase C: stored key is now a hash. Verify by attempting an auth.
+	if !IsHashedKey(user.Key) {
+		t.Errorf("expected stored key to be hashed, got plaintext: %s", user.Key)
+	}
+	authedUser, _ := ks.GetByKey("sk_bob_456")
+	if authedUser == nil || authedUser.ID != "bob" {
+		t.Errorf("GetByKey with original plaintext failed; got %v", authedUser)
 	}
 
 	user, _ = ks.GetByID("nonexistent")
@@ -199,8 +204,13 @@ func TestPersistence(t *testing.T) {
 		t.Fatal("User not persisted to disk")
 	}
 
-	if user.Key != "sk_diana_789" {
-		t.Errorf("User key not persisted correctly: %s", user.Key)
+	// Phase C: stored key is hashed; verify auth still works after reload.
+	if !IsHashedKey(user.Key) {
+		t.Errorf("expected key hashed after reload, got plaintext: %s", user.Key)
+	}
+	authedUser, _ := ks2.GetByKey("sk_diana_789")
+	if authedUser == nil || authedUser.ID != "diana" {
+		t.Errorf("GetByKey with original plaintext failed after reload; got %v", authedUser)
 	}
 
 	if user.Department != "ops" {

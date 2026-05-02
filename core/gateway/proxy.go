@@ -178,6 +178,22 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract model name from request if available (needed for access control)
 	modelName := extractModelName(r)
 
+	// Phase F2: enforce service-account IP allowlist (no-op for non-service users).
+	if ksac, ok := gw.accessController.(interface {
+		IsSourceIPAllowed(userID, sourceIP string) bool
+	}); ok && userID != "" {
+		if !ksac.IsSourceIPAllowed(userID, clientIP) {
+			gw.auditLogger.LogError(userID, r.RequestURI, correlationID,
+				fmt.Sprintf("source IP %s not in allowlist", clientIP),
+				http.StatusForbidden, clientIP)
+			if gw.Metrics != nil {
+				gw.Metrics.RecordAccessDenied(userID)
+			}
+			http.Error(w, `{"error":"source IP not allowed for this service account"}`, http.StatusForbidden)
+			return
+		}
+	}
+
 	// Check access control (Phase 2)
 	if gw.accessController != nil && userID != "" {
 		if !gw.accessController.CanAccess(userID, modelName) {

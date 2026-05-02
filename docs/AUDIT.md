@@ -102,7 +102,7 @@ export SOVSTACK_AUDIT_KEY="a1b2c3d4e5f6..."  # Encryption key
 ### Get Recent Logs
 
 ```bash
-curl http://localhost:8001/api/audit/logs?n=100
+curl http://localhost:8001/api/v1/audit/logs?n=100
 ```
 
 Response:
@@ -126,7 +126,7 @@ Response:
 ### Get Audit Statistics
 
 ```bash
-curl http://localhost:8001/api/audit/stats
+curl http://localhost:8001/api/v1/audit/stats
 ```
 
 Response:

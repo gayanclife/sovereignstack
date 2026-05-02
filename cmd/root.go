@@ -1,8 +1,10 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/gayanclife/sovereignstack/core/config"
 	"github.com/spf13/cobra"
 )
 
@@ -25,13 +27,18 @@ func Execute() {
 }
 
 func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
+	rootCmd.PersistentFlags().String("config", "", "Path to YAML config file (e.g. ~/.sovereignstack/sovstack.yaml)")
+}
 
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.sovstack.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+// loadConfig is a helper for subcommands. It reads --config from the cobra
+// command (a persistent flag on rootCmd), invokes config.Load, and returns
+// the result. Subcommands should call this once at the top of their RunE
+// and then apply per-flag overrides on top of the returned struct.
+func loadConfig(cmd *cobra.Command) (*config.Config, error) {
+	path, _ := cmd.Flags().GetString("config")
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return cfg, nil
 }

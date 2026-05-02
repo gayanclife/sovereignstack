@@ -19,7 +19,7 @@
 - Periodic polling of management service (30-second intervals)
 
 **Key Features:**
-- **Automatic discovery** — Polls `/api/models/running` from management service
+- **Automatic discovery** — Polls `/api/v1/models/running` from management service
 - **Registry updates** — Only includes models with "running" status
 - **Thread-safe** — RWMutex-protected concurrent access
 - **Fast lookups** — O(1) hash map access, <100ns per lookup

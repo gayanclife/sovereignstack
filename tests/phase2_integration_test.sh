@@ -181,7 +181,7 @@ test_case "Gateway audit logs endpoint is accessible"
 
 # Note: This is a basic connectivity test
 # (Full test would require actual backend running)
-RESPONSE=$(curl -s -w "\n%{http_code}" http://localhost:$GATEWAY_PORT/api/audit/logs 2>/dev/null | tail -1)
+RESPONSE=$(curl -s -w "\n%{http_code}" http://localhost:$GATEWAY_PORT/api/v1/audit/logs 2>/dev/null | tail -1)
 
 if [ "$RESPONSE" = "200" ]; then
     pass "Audit logs endpoint returns 200"

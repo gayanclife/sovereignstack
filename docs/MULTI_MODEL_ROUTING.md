@@ -31,13 +31,13 @@ This enables running multiple model instances on different ports and routing tra
          ┌─────────────────────────────┐
          │ Start Discovery Process     │
          │ - Poll every 30 seconds     │
-         │ - Fetch /api/models/running │
+         │ - Fetch /api/v1/models/running │
          └────────────┬────────────────┘
                       │
                       ↓
         ┌──────────────────────────────┐
         │ GET http://localhost:8888    │
-        │ /api/models/running          │
+        │ /api/v1/models/running          │
         └────────────┬─────────────────┘
                      │
                      ↓
@@ -142,7 +142,7 @@ sovstack deploy llama-3-8b --port 8002
 ### Start Gateway with Model Router
 
 ```bash
-# Default: polls http://localhost:8888/api/models/running every 30s
+# Default: polls http://localhost:8888/api/v1/models/running every 30s
 sovstack gateway \
   --backend http://localhost:8000 \
   --management-url http://localhost:8888 \
@@ -261,7 +261,7 @@ sovstack deploy new-model --port 8003
     Management service URL for model discovery
     (default "http://localhost:8888")
     
-    Used to poll: GET /api/models/running
+    Used to poll: GET /api/v1/models/running
     Every 30 seconds
 ```
 
@@ -418,7 +418,7 @@ After validation, remove old, rename new.
 **Diagnosis:**
 ```bash
 # Check management service is running
-curl http://localhost:8888/api/models/running
+curl http://localhost:8888/api/v1/models/running
 # Should return JSON list of models
 
 # Check management URL is correct
@@ -442,7 +442,7 @@ sovstack gateway --management-url http://management-host:port
 **Solution:**
 ```bash
 # Check if model is running
-curl http://localhost:8888/api/models/running | jq '.models[]'
+curl http://localhost:8888/api/v1/models/running | jq '.models[]'
 
 # Verify exact model name and status
 # Ensure model name matches request path exactly
@@ -460,7 +460,7 @@ curl http://localhost:8888/api/models/running | jq '.models[]'
 **Solution:**
 ```bash
 # Test connectivity
-curl -v http://localhost:8888/api/models/running
+curl -v http://localhost:8888/api/v1/models/running
 # Check response is valid JSON with "models" array
 
 # Check gateway logs for errors

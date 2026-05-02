@@ -14,7 +14,7 @@ cp .env.example .env
 docker-compose up -d management
 
 # Verify it's running
-curl http://localhost:8888/api/health
+curl http://localhost:8888/api/v1/health
 ```
 
 ### Using CLI
@@ -28,7 +28,7 @@ curl http://localhost:8888/api/health
 
 ## API Endpoints
 
-### GET `/api/health`
+### GET `/api/v1/health`
 
 Health check endpoint.
 
@@ -42,7 +42,7 @@ Health check endpoint.
 
 ---
 
-### GET `/api/models/running`
+### GET `/api/v1/models/running`
 
 List all running SovereignStack models.
 
@@ -143,7 +143,7 @@ docker ps | grep sovereignstack-management
 docker-compose logs management
 
 # Test health endpoint
-curl -v http://localhost:8888/api/health
+curl -v http://localhost:8888/api/v1/health
 ```
 
 ### "Docker permission denied" error

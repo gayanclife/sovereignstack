@@ -94,7 +94,7 @@ func (r *ModelRouter) Stop() {
 // refresh queries the management service for current models
 func (r *ModelRouter) refresh() error {
 	// Construct URL to management service
-	modelsURL := strings.TrimSuffix(r.managementURL, "/") + "/api/models/running"
+	modelsURL := strings.TrimSuffix(r.managementURL, "/") + "/api/v1/models/running"
 
 	resp, err := r.httpClient.Get(modelsURL)
 	if err != nil {

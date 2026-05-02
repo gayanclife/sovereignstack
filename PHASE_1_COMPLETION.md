@@ -247,8 +247,8 @@ sovstack keys info alice
 # Shows: key, department, team, role, rate limit, token quotas, models, timestamps
 
 # View audit logs (when gateway running)
-curl http://localhost:8001/api/audit/logs?n=10
-curl http://localhost:8001/api/audit/stats
+curl http://localhost:8001/api/v1/audit/logs?n=10
+curl http://localhost:8001/api/v1/audit/stats
 ```
 
 ---

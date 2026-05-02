@@ -1,0 +1,65 @@
+# =============================================================================
+# SovereignStack — example configuration
+# =============================================================================
+#
+# Copy to ~/.sovereignstack/sovstack.yaml or pass with --config /path/to/file.
+#
+# Precedence (highest wins): CLI flags > environment variables > this file > defaults.
+#
+# Every field also accepts an environment variable override; see the env tag
+# next to each field in core/config/config.go for the exact name. Common ones
+# are listed inline below.
+
+# -----------------------------------------------------------------------------
+# Logging — applies to all services (gateway, management, visibility).
+# -----------------------------------------------------------------------------
+log:
+  format: text   # text (dev-friendly) | json (production / log shippers)
+  level: info    # debug | info | warn | error
+  # env: SOVSTACK_LOG_FORMAT, SOVSTACK_LOG_LEVEL
+
+# -----------------------------------------------------------------------------
+# Gateway — the request hot path (auth, access, quota, routing, /metrics).
+# -----------------------------------------------------------------------------
+gateway:
+  port: 8001
+  rate_limit: 100             # requests per minute per user (0 = unlimited)
+  api_key_header: X-API-Key
+  backend: http://localhost:8000   # fallback backend when no model router match
+  management_url: http://localhost:8888
+  keys_file: ~/.sovereignstack/keys.json
+  audit_db: ./sovstack-audit.db
+  # env: SOVSTACK_GATEWAY_PORT, SOVSTACK_GATEWAY_RATE_LIMIT, SOVSTACK_KEYS_FILE, ...
+
+# -----------------------------------------------------------------------------
+# Management — control plane: Docker discovery, user policy, vLLM metrics proxy.
+# -----------------------------------------------------------------------------
+management:
+  port: 8888
+  keys_file: ~/.sovereignstack/keys.json
+  admin_key: ""               # leave blank; set via SOVSTACK_ADMIN_KEY env in production
+  # env: SOVSTACK_MANAGEMENT_PORT, SOVSTACK_ADMIN_KEY
+
+# -----------------------------------------------------------------------------
+# Visibility — analytics backend (commercial). Reads from gateway + management.
+# -----------------------------------------------------------------------------
+visibility:
+  port: 9000
+  gateway_url: http://localhost:8001
+  keys_file: ~/.sovereignstack/keys.json
+  db_type: sqlite             # sqlite (dev) | mysql (production)
+  db:
+    host: localhost
+    port: 3306
+    name: visibility
+    user: visibility
+    password: ""              # set via SOVSTACK_DB_PASSWORD env
+  # env: SOVSTACK_VISIBILITY_PORT, SOVSTACK_DB_HOST, SOVSTACK_DB_PASSWORD, ...
+
+# -----------------------------------------------------------------------------
+# CORS — applies to any service that exposes browser-callable endpoints.
+# -----------------------------------------------------------------------------
+cors:
+  origins:
+    - http://localhost:3000   # web dashboard
+  allow_dev_wildcard: false   # set true ONLY in dev to allow "*" — never in production

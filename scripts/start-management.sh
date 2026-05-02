@@ -123,18 +123,18 @@ start_container() {
         sleep 2
 
         # Check health
-        if curl -s http://localhost:8888/api/health > /dev/null 2>&1; then
+        if curl -s http://localhost:8888/api/v1/health > /dev/null 2>&1; then
             print_success "Management API is healthy"
             echo ""
             echo -e "${GREEN}🎉 Management API is running!${NC}"
             echo ""
             echo "Endpoints:"
-            echo "  Health:        http://localhost:8888/api/health"
-            echo "  Running Models: http://localhost:8888/api/models/running"
+            echo "  Health:        http://localhost:8888/api/v1/health"
+            echo "  Running Models: http://localhost:8888/api/v1/models/running"
             echo ""
             echo "Test it:"
-            echo "  curl http://localhost:8888/api/health"
-            echo "  curl http://localhost:8888/api/models/running | jq ."
+            echo "  curl http://localhost:8888/api/v1/health"
+            echo "  curl http://localhost:8888/api/v1/models/running | jq ."
             echo ""
         else
             print_error "Service is not responding to health check"
@@ -166,7 +166,7 @@ show_status() {
     cd "$PROJECT_ROOT"
 
     if docker-compose ps management 2>/dev/null | grep -q management || docker compose ps management | grep -q management; then
-        if curl -s http://localhost:8888/api/health > /dev/null 2>&1; then
+        if curl -s http://localhost:8888/api/v1/health > /dev/null 2>&1; then
             print_success "Management API is running and healthy"
             echo ""
             docker-compose ps management 2>/dev/null || docker compose ps management
@@ -185,14 +185,14 @@ show_status() {
 check_health() {
     print_header "Checking Management API Health"
 
-    echo "Testing /api/health endpoint..."
-    if response=$(curl -s http://localhost:8888/api/health); then
+    echo "Testing /api/v1/health endpoint..."
+    if response=$(curl -s http://localhost:8888/api/v1/health); then
         print_success "API is responding"
         echo "Response: $response"
         echo ""
 
-        echo "Testing /api/models/running endpoint..."
-        if models=$(curl -s http://localhost:8888/api/models/running); then
+        echo "Testing /api/v1/models/running endpoint..."
+        if models=$(curl -s http://localhost:8888/api/v1/models/running); then
             echo "Response: $(echo "$models" | jq . 2>/dev/null || echo "$models")"
         else
             print_error "Failed to query models"

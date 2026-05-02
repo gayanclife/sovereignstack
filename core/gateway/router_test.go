@@ -273,7 +273,7 @@ func TestExtractModelNameFromPath_Invalid(t *testing.T) {
 	tests := []string{
 		"/v1/models",
 		"/v1/chat/completions",
-		"/api/health",
+		"/api/v1/health",
 		"/models/",
 	}
 

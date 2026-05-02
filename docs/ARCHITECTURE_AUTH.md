@@ -371,8 +371,8 @@ type AuditLog struct {
 - **In-Memory** (default) — Fast, volatile, limited to N logs
 
 **Access via API:**
-- `GET /api/audit/logs?n=100` — Last 100 logs
-- `GET /api/audit/stats` — Aggregate statistics
+- `GET /api/v1/audit/logs?n=100` — Last 100 logs
+- `GET /api/v1/audit/stats` — Aggregate statistics
 
 ---
 

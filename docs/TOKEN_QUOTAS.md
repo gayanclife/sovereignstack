@@ -335,7 +335,7 @@ The detail message includes:
 
 Eventually, the gateway will expose:
 ```
-GET /api/gateway/quota?user=alice
+GET /api/v1/gateway/quota?user=alice
 
 → {
   "user": "alice",
@@ -560,7 +560,7 @@ curl -H "X-API-Key: sk_alice" /v1/chat/completions  # 100K tokens → total 550K
 ### Phase 2b+ Future Enhancements
 
 1. **Token Quota API Endpoint** (Phase 4)
-   - `GET /api/gateway/quota?user=alice` — Check quota status
+   - `GET /api/v1/gateway/quota?user=alice` — Check quota status
    - Expose quota metrics in Prometheus format
    - Dashboard widgets showing quota usage per user
 

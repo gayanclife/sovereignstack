@@ -2,7 +2,7 @@
 
 ## Overview
 
-Phase 9 adds a `/api/models/{name}/metrics` endpoint to the management service
+Phase 9 adds a `/api/v1/models/{name}/metrics` endpoint to the management service
 that proxies the Prometheus metrics endpoint of a specific vLLM model
 container. This allows the platform backend to scrape inference-level metrics
 (token throughput, KV cache usage, prefill/decode times, etc.) per-model
@@ -11,7 +11,7 @@ without having to discover container ports itself.
 ## Endpoint
 
 ```
-GET /api/models/{name}/metrics
+GET /api/v1/models/{name}/metrics
 ```
 
 **Authentication:** None (read-only operation, internal network only)
@@ -35,10 +35,10 @@ GET /api/models/{name}/metrics
 
 ```bash
 # Discover running models
-curl http://localhost:8888/api/models/running
+curl http://localhost:8888/api/v1/models/running
 
 # Fetch vLLM metrics for a specific model
-curl http://localhost:8888/api/models/mistral-7b/metrics
+curl http://localhost:8888/api/v1/models/mistral-7b/metrics
 ```
 
 **Sample Response:**
@@ -79,9 +79,9 @@ func handleModelMetrics(w http.ResponseWriter, r *http.Request, modelName string
 }
 ```
 
-The dispatcher `handleModelEndpoints` is registered against `/api/models/`
+The dispatcher `handleModelEndpoints` is registered against `/api/v1/models/`
 (trailing slash) so it does not collide with the existing
-`/api/models/running` exact-match route.
+`/api/v1/models/running` exact-match route.
 
 ---
 
@@ -97,8 +97,8 @@ http.Get("http://localhost:8000/metrics") // mistral-7b
 http.Get("http://localhost:8002/metrics") // phi-3
 
 // After: single management endpoint, model name only
-http.Get("http://localhost:8888/api/models/mistral-7b/metrics")
-http.Get("http://localhost:8888/api/models/phi-3/metrics")
+http.Get("http://localhost:8888/api/v1/models/mistral-7b/metrics")
+http.Get("http://localhost:8888/api/v1/models/phi-3/metrics")
 ```
 
 This decouples the collector from container port discovery and centralizes
@@ -111,7 +111,7 @@ the model-name → port mapping in the management service.
 **File:** `cmd/management_test.go`
 
 - `TestHandleModelEndpoints_InvalidPath` — path too short → 400
-- `TestHandleModelEndpoints_UnknownEndpoint` — `/api/models/x/foo` → 404
+- `TestHandleModelEndpoints_UnknownEndpoint` — `/api/v1/models/x/foo` → 404
 - `TestHandleModelMetrics_MethodNotAllowed` — POST/PUT/DELETE → 405
 - `TestHandleModelMetrics_ModelNotRunning` — non-existent model → 404 (or 500
   if Docker is unavailable)

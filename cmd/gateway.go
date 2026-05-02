@@ -1,9 +1,12 @@
 package cmd
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,9 +14,14 @@ import (
 
 	"github.com/gayanclife/sovereignstack/core/audit"
 	"github.com/gayanclife/sovereignstack/core/gateway"
+	"github.com/gayanclife/sovereignstack/core/health"
 	"github.com/gayanclife/sovereignstack/core/keys"
+	"github.com/gayanclife/sovereignstack/core/logging"
+	sovstacktls "github.com/gayanclife/sovereignstack/core/tls"
 	"github.com/spf13/cobra"
 )
+
+var errKeystoreNil = errors.New("keystore not initialized")
 
 var gatewayCmd = &cobra.Command{
 	Use:   "gateway",
@@ -43,15 +51,48 @@ func init() {
 }
 
 func runGateway(cmd *cobra.Command, args []string) error {
-	backend, _ := cmd.Flags().GetString("backend")
-	port, _ := cmd.Flags().GetInt("port")
-	rateLimit, _ := cmd.Flags().GetFloat64("rate-limit")
-	apiKeyHeader, _ := cmd.Flags().GetString("api-key-header")
+	cfg, err := loadConfig(cmd)
+	if err != nil {
+		return err
+	}
+	if _, err := logging.Init(cfg.Log); err != nil {
+		return err
+	}
+	log := logging.Service("gateway")
+
+	// Defaults come from cfg; CLI flags override only if the user explicitly
+	// set them. Cobra's Changed() distinguishes "user passed it" from
+	// "default value is being reported".
+	backend := cfg.Gateway.Backend
+	if cmd.Flags().Changed("backend") {
+		backend, _ = cmd.Flags().GetString("backend")
+	}
+	port := cfg.Gateway.Port
+	if cmd.Flags().Changed("port") {
+		port, _ = cmd.Flags().GetInt("port")
+	}
+	rateLimit := cfg.Gateway.RateLimit
+	if cmd.Flags().Changed("rate-limit") {
+		rateLimit, _ = cmd.Flags().GetFloat64("rate-limit")
+	}
+	apiKeyHeader := cfg.Gateway.APIKeyHeader
+	if cmd.Flags().Changed("api-key-header") {
+		apiKeyHeader, _ = cmd.Flags().GetString("api-key-header")
+	}
 	auditBuffer, _ := cmd.Flags().GetInt("audit-buffer")
-	auditDB, _ := cmd.Flags().GetString("audit-db")
+	auditDB := cfg.Gateway.AuditDB
+	if cmd.Flags().Changed("audit-db") {
+		auditDB, _ = cmd.Flags().GetString("audit-db")
+	}
 	auditKey, _ := cmd.Flags().GetString("audit-key")
-	keysPath, _ := cmd.Flags().GetString("keys")
-	managementURL, _ := cmd.Flags().GetString("management-url")
+	keysPath := cfg.Gateway.KeysFile
+	if cmd.Flags().Changed("keys") {
+		keysPath, _ = cmd.Flags().GetString("keys")
+	}
+	managementURL := cfg.Gateway.ManagementURL
+	if cmd.Flags().Changed("management-url") {
+		managementURL, _ = cmd.Flags().GetString("management-url")
+	}
 
 	// Resolve encryption key
 	if auditKey == "" {
@@ -62,21 +103,42 @@ func runGateway(cmd *cobra.Command, args []string) error {
 		keyBytes := make([]byte, 32)
 		rand.Read(keyBytes)
 		auditKey = hex.EncodeToString(keyBytes)
-		fmt.Printf("\n⚠️  Generated audit encryption key (save this for future restarts):\n")
-		fmt.Printf("   SOVSTACK_AUDIT_KEY=%s\n\n", auditKey)
+		log.Warn("generated new audit encryption key — save this for future restarts",
+			"env_var", "SOVSTACK_AUDIT_KEY", "value", auditKey)
+		if cfg.Log.Format != "json" {
+			fmt.Printf("\n⚠️  Generated audit encryption key (save this for future restarts):\n")
+			fmt.Printf("   SOVSTACK_AUDIT_KEY=%s\n\n", auditKey)
+		}
 	}
 
-	// Create audit logger (SQLite or in-memory)
-	var auditLogger audit.AuditLogger
-	var err error
+	// Create audit logger — primary sink (SQLite or in-memory).
+	var primary audit.AuditLogger
 
 	if auditDB != "" {
-		auditLogger, err = audit.NewSQLiteLogger(auditDB, auditKey)
+		primary, err = audit.NewSQLiteLogger(auditDB, auditKey)
 		if err != nil {
 			return fmt.Errorf("failed to create SQLite audit logger: %w", err)
 		}
 	} else {
-		auditLogger = audit.NewLogger(auditBuffer)
+		primary = audit.NewLogger(auditBuffer)
+	}
+
+	// Phase B3+B4: optional JSONL cold path and additional sinks via config.
+	auditSinks := []audit.AuditLogger{primary}
+	if dir := cfg.Gateway.Audit.JSONLDir; dir != "" {
+		jsonl, err := audit.NewJSONLLogger(dir)
+		if err != nil {
+			return fmt.Errorf("audit jsonl: %w", err)
+		}
+		auditSinks = append(auditSinks, jsonl)
+		log.Info("audit cold path enabled", "type", "jsonl", "dir", dir)
+	}
+
+	var auditLogger audit.AuditLogger
+	if len(auditSinks) == 1 {
+		auditLogger = auditSinks[0]
+	} else {
+		auditLogger = audit.NewMultiSinkLogger(auditSinks...)
 	}
 
 	// Load keys from file or use hardcoded test keys
@@ -107,8 +169,13 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	if usingKeyStore {
 		// Wire up access controller (Phase 2) when using KeyStore
 		accessController = gateway.NewKeyStoreAccessController(keyStore)
-		// Wire up quota manager (Phase 2b) when using KeyStore
-		quotaManager = gateway.NewTokenQuotaManager(keyStore)
+		// Wire up quota manager (Phase 2b) with pluggable backend (Phase B5)
+		quotaBackend, quotaBackendName, err := gateway.BuildQuotaBackend(cfg.Gateway.Quota)
+		if err != nil {
+			return fmt.Errorf("quota backend: %w", err)
+		}
+		log.Info("quota backend ready", "backend", quotaBackendName)
+		quotaManager = gateway.NewTokenQuotaManagerWithBackend(keyStore, quotaBackend)
 	}
 
 	// Create model router (Phase 3) for multi-model routing
@@ -130,54 +197,74 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	}
 
 	listenAddr := fmt.Sprintf(":%d", port)
-	fmt.Printf("🚀 Starting SovereignStack Gateway\n")
-	fmt.Printf("  Backend: %s\n", backend)
-	fmt.Printf("  Listening: %s\n", listenAddr)
-	fmt.Printf("  Rate Limit: %.0f req/min per user\n", rateLimit)
-	fmt.Printf("  API Key Header: %s\n", apiKeyHeader)
+
+	// Structured startup event — always logged (machine-parseable in JSON mode).
+	auditMode := "in-memory"
 	if auditDB != "" {
-		fmt.Printf("  Audit Log: SQLite (encrypted) at %s\n", auditDB)
-	} else {
-		fmt.Printf("  Audit Log: In-memory (%d logs max)\n", auditBuffer)
+		auditMode = "sqlite-encrypted"
 	}
+	log.Info("gateway starting",
+		slog.String("backend", backend),
+		slog.String("listen", listenAddr),
+		slog.Float64("rate_limit_per_min", rateLimit),
+		slog.String("api_key_header", apiKeyHeader),
+		slog.String("audit_mode", auditMode),
+		slog.String("audit_db", auditDB),
+		slog.Bool("using_keystore", usingKeyStore),
+		slog.Int("registered_models", modelRouter.GetModelCount()),
+		slog.String("management_url", managementURL),
+	)
 
-	if usingKeyStore {
-		fmt.Printf("  Keys: Loaded from %s\n", keysPath)
-		users := keyStore.ListUsers()
-		fmt.Printf("  Users: %d registered\n", len(users))
-		fmt.Printf("  Access Control: Enabled (Phase 2)\n")
-		fmt.Printf("  Token Quotas: Enabled (Phase 2b)\n")
-	} else {
-		fmt.Printf("\nExample test keys (hardcoded for development):\n")
-		fmt.Printf("  - sk_test_123 (test-user)\n")
-		fmt.Printf("  - sk_demo_456 (demo-user)\n")
-		fmt.Printf("\n  To use keys.json, run: sovstack gateway --keys ~/.sovereignstack/keys.json\n")
+	// Decorative banner — only shown in human/text mode.
+	if cfg.Log.Format != "json" {
+		fmt.Printf("🚀 Starting SovereignStack Gateway\n")
+		fmt.Printf("  Backend: %s\n", backend)
+		fmt.Printf("  Listening: %s\n", listenAddr)
+		fmt.Printf("  Rate Limit: %.0f req/min per user\n", rateLimit)
+		fmt.Printf("  API Key Header: %s\n", apiKeyHeader)
+		if auditDB != "" {
+			fmt.Printf("  Audit Log: SQLite (encrypted) at %s\n", auditDB)
+		} else {
+			fmt.Printf("  Audit Log: In-memory (%d logs max)\n", auditBuffer)
+		}
+
+		if usingKeyStore {
+			fmt.Printf("  Keys: Loaded from %s\n", keysPath)
+			users := keyStore.ListUsers()
+			fmt.Printf("  Users: %d registered\n", len(users))
+			fmt.Printf("  Access Control: Enabled (Phase 2)\n")
+			fmt.Printf("  Token Quotas: Enabled (Phase 2b)\n")
+		} else {
+			fmt.Printf("\nExample test keys (hardcoded for development):\n")
+			fmt.Printf("  - sk_test_123 (test-user)\n")
+			fmt.Printf("  - sk_demo_456 (demo-user)\n")
+			fmt.Printf("\n  To use keys.json, run: sovstack gateway --keys ~/.sovereignstack/keys.json\n")
+		}
+
+		fmt.Printf("  Model Router: Enabled (Phase 3, polling %s every 30s)\n", managementURL)
+		fmt.Printf("  Registered Models: %d\n", modelRouter.GetModelCount())
+		fmt.Printf("  Metrics: Enabled (Phase 4, Prometheus format)\n")
+
+		fmt.Printf("\nUsage:\n")
+		fmt.Printf("  curl -H 'X-API-Key: sk_test_123' http://localhost:%d/v1/models\n", port)
+		fmt.Printf("  curl -H 'X-API-Key: sk_test_123' http://localhost:%d/models/mistral-7b/v1/chat/completions\n", port)
+		fmt.Printf("\nView metrics (Prometheus format):\n")
+		fmt.Printf("  curl http://localhost:%d/metrics\n", port)
+		fmt.Printf("\nView audit logs:\n")
+		fmt.Printf("  curl http://localhost:%d/api/v1/audit/logs\n", port)
+		fmt.Printf("\nPress Ctrl+C to stop\n\n")
 	}
-
-	// Show model routing status
-	fmt.Printf("  Model Router: Enabled (Phase 3, polling %s every 30s)\n", managementURL)
-	fmt.Printf("  Registered Models: %d\n", modelRouter.GetModelCount())
-	fmt.Printf("  Metrics: Enabled (Phase 4, Prometheus format)\n")
-
-	fmt.Printf("\nUsage:\n")
-	fmt.Printf("  curl -H 'X-API-Key: sk_test_123' http://localhost:%d/v1/models\n", port)
-	fmt.Printf("  curl -H 'X-API-Key: sk_test_123' http://localhost:%d/models/mistral-7b/v1/chat/completions\n", port)
-	fmt.Printf("\nView metrics (Prometheus format):\n")
-	fmt.Printf("  curl http://localhost:%d/metrics\n", port)
-	fmt.Printf("\nView audit logs:\n")
-	fmt.Printf("  curl http://localhost:%d/api/audit/logs\n", port)
-	fmt.Printf("\nPress Ctrl+C to stop\n\n")
 
 	// Create metrics tracker (Phase 4)
 	metrics := gateway.NewGatewayMetrics()
 	gw.Metrics = metrics
 
 	// Add audit endpoints
-	http.HandleFunc("/api/audit/logs", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/api/v1/audit/logs", func(w http.ResponseWriter, r *http.Request) {
 		handleAuditLogs(w, r, auditLogger)
 	})
 
-	http.HandleFunc("/api/audit/stats", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/api/v1/audit/stats", func(w http.ResponseWriter, r *http.Request) {
 		handleAuditStats(w, r, auditLogger)
 	})
 
@@ -186,6 +273,20 @@ func runGateway(cmd *cobra.Command, args []string) error {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		w.Write([]byte(metrics.WritePrometheusText()))
 	})
+
+	// Health probes (Phase A5)
+	healthChecker := health.New()
+	healthChecker.Register("management", health.HTTPCheck(nil, managementURL+"/healthz"))
+	if usingKeyStore {
+		healthChecker.Register("keystore", func(ctx context.Context) error {
+			if keyStore == nil {
+				return errKeystoreNil
+			}
+			return nil
+		})
+	}
+	http.HandleFunc("/healthz", healthChecker.LivenessHandler())
+	http.HandleFunc("/readyz", healthChecker.ReadinessHandler())
 
 	// Main gateway handler (all other requests)
 	http.Handle("/", gw)
@@ -196,15 +297,32 @@ func runGateway(cmd *cobra.Command, args []string) error {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
-		fmt.Printf("\n\n✓ Shutting down gracefully...\n")
-		modelRouter.Stop() // Stop model discovery
+		log.Info("shutting down gracefully")
+		modelRouter.Stop()
 		server.Close()
 	}()
 
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("gateway error: %w", err)
+	// Phase C3: resolve TLS config; falls back to plain HTTP only when
+	// --insecure-http (or tls.insecure_http) is explicitly set.
+	tlsCert, tlsKey, fp, err := sovstacktls.Resolve(
+		cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.TLS.Dir,
+		cfg.TLS.InsecureHTTP, []string{"localhost", "127.0.0.1"})
+	if err != nil {
+		return fmt.Errorf("tls: %w", err)
 	}
-
+	if cfg.TLS.InsecureHTTP {
+		log.Warn("TLS disabled — serving plain HTTP. Do NOT use this in production.",
+			"flag", "tls.insecure_http")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("gateway error: %w", err)
+		}
+		return nil
+	}
+	log.Info("TLS enabled",
+		"cert", tlsCert, "key", tlsKey, "fingerprint", fp)
+	if err := server.ListenAndServeTLS(tlsCert, tlsKey); err != nil && err != http.ErrServerClosed {
+		return fmt.Errorf("gateway tls error: %w", err)
+	}
 	return nil
 }
 

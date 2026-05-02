@@ -24,8 +24,8 @@ This document explains the purpose and configuration of each container in the So
 
 **Key Features:**
 - Queries Docker daemon for running model containers
-- Exposes `/api/health` health check endpoint
-- Exposes `/api/models/running` endpoint returning running models as JSON
+- Exposes `/api/v1/health` health check endpoint
+- Exposes `/api/v1/models/running` endpoint returning running models as JSON
 - Auto-restarts on failure
 - Includes health checks every 30 seconds
 
@@ -44,11 +44,11 @@ volumes:
 **Endpoints:**
 ```bash
 # Health check
-curl http://localhost:8888/api/health
+curl http://localhost:8888/api/v1/health
 # {"status":"ok","ready":true}
 
 # List running models
-curl http://localhost:8888/api/models/running
+curl http://localhost:8888/api/v1/models/running
 # {
 #   "version": "1.0",
 #   "models": [...],
@@ -366,7 +366,7 @@ docker-compose up -d
 - ✅ Visual dashboards
 
 **URLs:**
-- Models: http://localhost:8888/api/models/running
+- Models: http://localhost:8888/api/v1/models/running
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
 

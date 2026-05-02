@@ -55,6 +55,21 @@ func (ac *KeyStoreAccessController) CanAccess(userID, modelName string) bool {
 	return false
 }
 
+// IsSourceIPAllowed returns false only when the user is a service account
+// with a non-empty IPAllowlist that excludes the given source. Phase F2.
+//
+// Returns true (allowed) for users we can't look up — auth has already
+// gated this call, and silently denying based on lookup failure would be
+// surprising. The keystore-not-found case can't happen here in practice
+// because the same user just authenticated.
+func (ac *KeyStoreAccessController) IsSourceIPAllowed(userID, sourceIP string) bool {
+	profile, err := ac.store.GetByID(userID)
+	if err != nil || profile == nil {
+		return true
+	}
+	return profile.IsIPAllowed(sourceIP)
+}
+
 // DenyAllAccessController denies all access (useful for testing).
 type DenyAllAccessController struct{}
 
