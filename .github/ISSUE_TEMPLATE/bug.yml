@@ -1,0 +1,97 @@
+name: Bug report
+description: Something doesn't work the way the docs say it should.
+title: "[bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please include enough detail that we can
+        reproduce it locally — without that, we usually have to ask
+        clarifying questions before we can act.
+
+        For security issues, do NOT file a public issue. See
+        [SECURITY.md](../../SECURITY.md).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A short description of the actual behaviour.
+      placeholder: "When I run `sovstack gateway`, it crashes after ~30 seconds with…"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-expected
+    attributes:
+      label: What did you expect?
+      description: How the docs / your understanding led you to expect different behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Steps to reproduce
+      description: |
+        The shorter and more deterministic, the better. A failing
+        `go test -run TestX` is ideal; a curl one-liner is great; a 10-step
+        manual procedure is workable.
+      placeholder: |
+        1. `sovstack keys add alice`
+        2. `sovstack gateway --keys ~/.sovereignstack/keys.json &`
+        3. `curl -H "X-API-Key: …" https://localhost:8001/v1/models/foo/chat/completions`
+        4. Observe gateway log line "panic: …"
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `sovstack --version` (or commit SHA if running from source)
+      placeholder: "v1.0.0 / commit abc1234"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: OS
+      options:
+        - Linux (Ubuntu / Debian / Alpine)
+        - Linux (RHEL / Fedora / CentOS)
+        - macOS (arm64)
+        - macOS (x86_64)
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: Output of `go version`
+      placeholder: "go1.24.0 linux/amd64"
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: |
+        Run with `--log-format json` if possible. Trim to the relevant
+        section — we don't need 10MB of context.
+      render: shell
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Sanity checks
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: This isn't a security issue (those go to security@sovereignstack.io).
+          required: true

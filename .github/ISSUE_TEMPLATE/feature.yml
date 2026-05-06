@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose a new capability or a meaningful change in behaviour.
+title: "[feat] "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening: skim [CONTRIBUTING.md](../../CONTRIBUTING.md) — it
+        outlines what we accept and what's likely to be declined.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: |
+        Describe the situation. What are you trying to do? Where does
+        the current stack get in your way? "I want feature X" is harder
+        to evaluate than "I'm trying to do Y and X would unblock me."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        How would you want this to work? CLI flag, config key, new
+        endpoint, behaviour change?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: |
+        Workarounds, third-party tools, or other approaches you've
+        thought about. Helps us understand whether this needs to be
+        in-tree or could be a sidecar.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Where does this belong?
+      options:
+        - Gateway request path (auth, access, quota, routing)
+        - Policy / management API
+        - Audit log
+        - CLI ergonomics
+        - Docs only
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: would-you-implement
+    attributes:
+      label: Would you be willing to implement this?
+      options:
+        - label: Yes, I'd send a PR if we agree on the design.
+        - label: Yes, but I'd need maintainer guidance on architecture.
+        - label: I'm reporting; happy to test a PR but won't write one.

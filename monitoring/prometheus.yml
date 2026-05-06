@@ -1,0 +1,43 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'sovereignstack'
+    environment: 'production'
+
+scrape_configs:
+  # vLLM inference engine metrics
+  - job_name: 'vllm'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['localhost:8000']
+    metrics_path: '/metrics'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'vllm-engine'
+
+  # Node-Exporter for host system metrics
+  - job_name: 'node'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:9100']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'host-system'
+
+  # cAdvisor for Docker container metrics
+  - job_name: 'cadvisor'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['localhost:8080']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'docker-metrics'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']

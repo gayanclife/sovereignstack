@@ -1,0 +1,146 @@
+# =============================================================================
+# SovereignStack — main stack (open source) gitignore
+# =============================================================================
+
+# --- Project binaries & build artefacts -------------------------------------
+bin/
+dist/
+build/
+out/
+/sovstack
+/sovereignstack
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+coverage.html
+*.prof
+
+# --- Go ----------------------------------------------------------------------
+go.work
+go.work.sum
+/pkg/
+/go.sum.bak
+.cache/
+
+# --- Python (test scripts only; no production Python in this repo) -----------
+__pycache__/
+venv/
+.venv/
+*.py[cod]
+*$py.class
+
+# --- AI/ML model weights (large; regenerated via `sovstack pull`) ------------
+# DO commit: models.yaml (bundled registry); DO NOT commit: downloaded weights.
+models/
+models.local.yaml
+datasets/
+.cache/
+.cache/huggingface/
+.cache/vllm/
+*.safetensors
+*.bin
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.tflite
+
+# --- User-local data (per-machine state) ------------------------------------
+.sovereignstack/
+.sovereignstack/models/
+.sovereignstack/logs/
+.sovereignstack/config.json
+.sovereignstack/keys.json
+.sovereignstack/tls/
+
+# --- Demo / start-script output ---------------------------------------------
+logs/
+.demo-pids
+*.pid
+
+# --- Infrastructure / DevOps -------------------------------------------------
+volumes/
+docker-compose.override.yml
+
+# Terraform
+.terraform/
+*.tfstate*
+*.tfvars
+.terraform.lock.hcl
+
+# Cloud CLIs
+.aws/
+.azure/
+.gcloud/
+
+# Monitoring data dirs
+monitoring/data/
+grafana_data/
+prometheus_data/
+
+# --- Secrets & sensitive files ----------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+credentials.json
+keys.json
+
+# --- Databases (SQLite audit + dev) ------------------------------------------
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+sovstack-audit.db
+audit.db
+metrics.db
+anomalies.db
+
+# --- Audit log files (cold path JSONL) ---------------------------------------
+audit-*.jsonl
+audit-*.jsonl.gz
+*.audit.log
+
+# --- Logs --------------------------------------------------------------------
+*.log
+logs/
+
+# --- IDE / OS noise ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Temp ------------------------------------------------------------------
+*.tmp
+*.temp
+.tmp/
+.scratch/
+
+# --- Claude Code / agent metadata (per-developer) ---------------------------
+.claude/
+
+# --- Plan / scratch markdown (kept locally only) ----------------------------
+.plans/
+PLAN.md.local
+NOTES.local.md
