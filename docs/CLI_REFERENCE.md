@@ -107,8 +107,11 @@ SOVEREIGNSTACK_CACHE_DIR=/tmp/models sovstack pull gpt2
 
 **Features:**
 - ✓ Automatic file type detection (safetensors, bin, pt, pth, gguf)
+- ✓ Sharded weight support — reads `model.safetensors.index.json` /
+  `pytorch_model.bin.index.json` and pulls every referenced shard
+  (e.g. `model-00001-of-00002.safetensors`) plus the index manifest
 - ✓ Resume support (continues interrupted downloads)
-- ✓ Metadata verification (size validation)
+- ✓ Metadata verification (size validation, safetensors header check)
 - ✓ Progress reporting (file counts and sizes)
 - ✓ Audit logging (download success/failure)
 
@@ -379,6 +382,60 @@ sovstack verify gpt2 && sovstack deploy gpt2
 - Model must be verified as ready (run `sovstack verify <model>`)
 - Docker must be running
 - Sufficient VRAM/RAM for the model
+
+---
+
+### `sovstack test [model-name]`
+
+Send a sample request to a running model to verify it's working. Picks the
+right request shape based on what the model can actually serve — chat
+completion for generative / seq2seq models, embedding for encoders,
+classification for classifiers.
+
+**Syntax:**
+```bash
+sovstack test [model-name] [flags]
+```
+
+**Flags:**
+- `--prompt, -p STRING` - Prompt / input text (default: a short AI question)
+- `--tokens, -t INT` - Max tokens to generate (generative / seq2seq only, default: 50)
+- `--temperature, -T FLOAT` - Sampling temperature 0.0–1.0 (default: 0.7)
+
+**Examples:**
+```bash
+# Auto-select if only one model is running, else prompt interactively
+sovstack test
+
+# Test a specific running model
+sovstack test mistral-7b
+
+# Custom prompt and length
+sovstack test mistral-7b --prompt "Summarize quantum tunnelling." --tokens 200
+
+# Embedding model — --tokens / --temperature are ignored
+sovstack test bert-base --prompt "vector this please"
+```
+
+**Capability dispatch:**
+
+The command first calls the model's `GET /v1/models` endpoint and reads
+the reported `capability`. The reply chooses which test endpoint to hit:
+
+| Capability       | Endpoint exercised      |
+|------------------|-------------------------|
+| `generative`     | `POST /v1/chat/completions` |
+| `seq2seq`        | `POST /v1/chat/completions` |
+| `encoder`        | `POST /v1/embeddings`   |
+| `classification` | `POST /v1/classify`     |
+
+If the running server does not expose `/v1/models` (older builds that
+predate capability detection), the command falls back to chat completions
+with a note in the output.
+
+**Prerequisites:**
+- The target model must already be running (use `sovstack deploy <model>`)
+- The container must expose its inference port
 
 ---
 

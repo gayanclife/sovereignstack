@@ -131,23 +131,142 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("model '%s' is not running (status: %s)", targetModel.ModelName, targetModel.Status)
 	}
 
-	// Send test request
 	fmt.Printf("📤 Testing model: %s\n", targetModel.ModelName)
 	fmt.Printf("   Port: %d\n", targetModel.Port)
-	fmt.Printf("   Prompt: \"%s\"\n", prompt)
-	fmt.Printf("   Max tokens: %d\n", maxTokens)
-	fmt.Printf("   Temperature: %.2f\n\n", temperature)
 
-	response, err := sendTestRequest(targetModel.Port, prompt, maxTokens, temperature)
+	// Discover what this model can actually serve. Old servers without
+	// /v1/models pre-date the model-agnostic loader — fall back to chat.
+	cap, err := fetchCapability(targetModel.Port)
+	if err != nil {
+		fmt.Printf("   Capability: unknown (older server) — defaulting to chat completions\n\n")
+		return runChatTest(targetModel.Port, prompt, maxTokens, temperature)
+	}
+	fmt.Printf("   Capability: %s (endpoints: %s)\n\n", cap.Capability, strings.Join(cap.Endpoints, ", "))
+
+	switch cap.Capability {
+	case "generative", "seq2seq":
+		fmt.Printf("   Prompt: %q\n   Max tokens: %d\n   Temperature: %.2f\n\n", prompt, maxTokens, temperature)
+		return runChatTest(targetModel.Port, prompt, maxTokens, temperature)
+	case "encoder":
+		fmt.Printf("   Input: %q (encoder model — testing /v1/embeddings)\n\n", prompt)
+		return runEmbeddingTest(targetModel.Port, prompt)
+	case "classification":
+		fmt.Printf("   Input: %q (classifier — testing /v1/classify)\n\n", prompt)
+		return runClassifyTest(targetModel.Port, prompt)
+	default:
+		return fmt.Errorf("unsupported model capability %q (endpoints: %v)", cap.Capability, cap.Endpoints)
+	}
+}
+
+type modelCapability struct {
+	Capability string   `json:"capability"`
+	Endpoints  []string `json:"endpoints"`
+	ID         string   `json:"id"`
+}
+
+func fetchCapability(port int) (*modelCapability, error) {
+	url := fmt.Sprintf("http://localhost:%d/v1/models", port)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	var body struct {
+		Data []modelCapability `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if len(body.Data) == 0 {
+		return nil, fmt.Errorf("empty data array")
+	}
+	return &body.Data[0], nil
+}
+
+func runChatTest(port int, prompt string, maxTokens int, temperature float32) error {
+	response, err := sendTestRequest(port, prompt, maxTokens, temperature)
 	if err != nil {
 		return fmt.Errorf("failed to send test request: %w", err)
 	}
-
 	fmt.Printf("✅ Response received:\n")
-	fmt.Printf("──────────────────────────────────────────\n")
-	fmt.Printf("%s\n", response)
-	fmt.Printf("──────────────────────────────────────────\n\n")
+	fmt.Printf("──────────────────────────────────────────\n%s\n──────────────────────────────────────────\n\n", response)
+	return nil
+}
 
+func runEmbeddingTest(port int, input string) error {
+	url := fmt.Sprintf("http://localhost:%d/v1/embeddings", port)
+	body, _ := json.Marshal(map[string]interface{}{"input": input})
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to send embedding request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+	var result struct {
+		Data []struct {
+			Embedding []float64 `json:"embedding"`
+		} `json:"data"`
+		Usage struct {
+			TotalTokens int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to parse embedding response: %w", err)
+	}
+	if len(result.Data) == 0 || len(result.Data[0].Embedding) == 0 {
+		return fmt.Errorf("empty embedding in response")
+	}
+	vec := result.Data[0].Embedding
+	preview := vec
+	if len(preview) > 5 {
+		preview = preview[:5]
+	}
+	fmt.Printf("✅ Embedding generated:\n")
+	fmt.Printf("   Dimensions: %d\n", len(vec))
+	fmt.Printf("   First 5 values: %v\n", preview)
+	fmt.Printf("   Tokens used: %d\n\n", result.Usage.TotalTokens)
+	return nil
+}
+
+func runClassifyTest(port int, input string) error {
+	url := fmt.Sprintf("http://localhost:%d/v1/classify", port)
+	body, _ := json.Marshal(map[string]interface{}{"input": input})
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to send classify request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+	var result struct {
+		Labels []struct {
+			Label string  `json:"label"`
+			Score float64 `json:"score"`
+		} `json:"labels"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to parse classify response: %w", err)
+	}
+	fmt.Printf("✅ Classification results:\n")
+	limit := len(result.Labels)
+	if limit > 5 {
+		limit = 5
+	}
+	for i := 0; i < limit; i++ {
+		fmt.Printf("   %d. %s (%.4f)\n", i+1, result.Labels[i].Label, result.Labels[i].Score)
+	}
+	fmt.Println()
 	return nil
 }
 
