@@ -459,5 +459,5 @@ curl http://localhost:9090/api/v1/query?query=up
 ## Next Steps
 
 - **Visibility Platform Setup:** See [MAIN_STACK_INTEGRATION.md](./MAIN_STACK_INTEGRATION.md)
-- **Model Management:** See [Model Commands](./MODEL_COMMANDS.md)
+- **Model Management:** See [Model management](./MODEL_MANAGEMENT.md)
 - **Production Deployment:** See [PRODUCTION_GUIDE.md](./PRODUCTION_GUIDE.md)

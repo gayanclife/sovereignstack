@@ -92,7 +92,8 @@ When you add a feature, add docs. The convention is:
 - **docs/QUICKSTART.md** — 5-minute walkthrough for new users
 - **docs/CONFIGURATION.md** — every config key, with comments
 - **docs/<TOPIC>.md** — feature-focused guides (KEYS_MANAGEMENT, MONITORING, etc.)
-- **docs/development/PHASE_*.md** — implementation notes, kept for history
+- (Implementation history lives in git log + CHANGELOG.md, not in
+  separate docs.)
 
 A new feature doesn't have to invent a new doc. Extending an existing
 one is usually right.

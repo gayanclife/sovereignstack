@@ -295,5 +295,5 @@ export SOVEREIGNSTACK_CACHE_DIR=/mnt/large-storage/models
 
 **See Also:**
 - [Quick Start Guide](./QUICKSTART.md)
-- [Command Reference](./COMMANDS.md) — `pull`, `up`, `status`, `remove`
+- [Command Reference](./CLI_REFERENCE.md) — `pull`, `up`, `status`, `remove`
 - [Gateway & Security Setup](./GATEWAY_SECURITY.md) *(Coming Soon)*
