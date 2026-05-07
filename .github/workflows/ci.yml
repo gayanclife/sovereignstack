@@ -69,10 +69,9 @@ jobs:
         with:
           go-version-file: go.mod
       # golangci-lint v1.64.x was built against Go 1.24 and rejects newer
-      # go.mod targets. v2.x supports Go 1.25; pin a known-good release
-      # rather than `latest` so a future v3 can't break this on its own
-      # schedule.
-      - uses: golangci/golangci-lint-action@v6
+      # go.mod targets. v2.x supports Go 1.25 but requires action v7 — v6
+      # only knew about v1 and rejects 'v2.x' as an invalid version.
+      - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.5.0
           args: --timeout=5m
