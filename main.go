@@ -15,6 +15,19 @@ import (
 	"github.com/gayanclife/sovereignstack/cmd"
 )
 
+// Build metadata, populated by GoReleaser at link time:
+//
+//	go build -ldflags "-X main.version=v1.0.0 -X main.commit=abc1234 -X main.date=2026-05-07"
+//
+// `cmd.Execute` reads these via cmd.SetVersionInfo so the `version`
+// subcommand can report them.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
+	cmd.SetVersionInfo(version, commit, date)
 	cmd.Execute()
 }

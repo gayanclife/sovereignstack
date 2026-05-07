@@ -1,0 +1,163 @@
+# GoReleaser config for SovereignStack.
+# https://goreleaser.com/customization/
+#
+# Drives the entire release pipeline: cross-compile binaries, archive
+# them, generate checksums, build .deb / .rpm packages, publish to
+# GitHub Releases, and update a Homebrew tap.
+#
+# Triggered by `git tag vX.Y.Z && git push origin vX.Y.Z` — the GitHub
+# Actions workflow at .github/workflows/release.yml takes it from there.
+
+version: 2
+
+project_name: sovstack
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: sovstack
+    main: .
+    binary: sovstack
+    env:
+      - CGO_ENABLED=1   # required for github.com/mattn/go-sqlite3
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    # Skip combinations that aren't realistic for our users.
+    ignore: []
+    # `-s -w` strips symbols and DWARF info — about 30% smaller binary.
+    # ldflags inject the version into a `version` package; if you don't
+    # have one yet, drop the `-X` lines.
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .CommitDate }}
+
+archives:
+  - id: tarball
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - sovstack.yaml.example
+      - docs/QUICKSTART.md
+    format_overrides:
+      - goos: windows
+        formats: ["zip"]
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Linux packages: .deb for apt, .rpm for dnf, plus apk and archlinux.
+nfpms:
+  - id: sovstack-pkg
+    package_name: sovstack
+    vendor: SovereignStack
+    homepage: https://github.com/sovereignstack/sovereignstack
+    maintainer: SovereignStack Maintainers <maintainers@sovereignstack.io>
+    description: |-
+      SovereignStack — self-hosted LLM serving with auth, quotas, audit,
+      and Prometheus metrics. One Go binary, no external dependencies
+      beyond Docker for model containers.
+    license: Apache-2.0
+    formats:
+      - deb
+      - rpm
+      - apk
+    bindir: /usr/bin
+    contents:
+      - src: sovstack.yaml.example
+        dst: /etc/sovstack/sovstack.yaml.example
+        type: config
+      - src: LICENSE
+        dst: /usr/share/doc/sovstack/copyright
+      - src: README.md
+        dst: /usr/share/doc/sovstack/README.md
+      - src: CHANGELOG.md
+        dst: /usr/share/doc/sovstack/changelog
+    recommends:
+      - docker.io
+    suggests:
+      - redis-server
+
+# Homebrew tap. Creates / updates a formula in a separate repo named
+# `homebrew-tap` under the same GitHub owner. Users install with:
+#   brew tap sovereignstack/tap
+#   brew install sovstack
+brews:
+  - name: sovstack
+    repository:
+      owner: sovereignstack
+      name: homebrew-tap
+      branch: main
+      # The token used to push to the tap repo. Set as a GitHub secret
+      # (HOMEBREW_TAP_GITHUB_TOKEN) — a fine-grained PAT with contents:
+      # write on the tap repo only.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/sovereignstack/sovereignstack
+    description: Self-hosted LLM serving with auth, quotas, audit, and Prometheus metrics
+    license: Apache-2.0
+    install: |
+      bin.install "sovstack"
+      pkgshare.install "sovstack.yaml.example"
+      doc.install "README.md", "CHANGELOG.md", "LICENSE"
+    test: |
+      assert_match "SovereignStack", shell_output("#{bin}/sovstack --help")
+    # Run by `brew install` to print first-use instructions.
+    caveats: |
+      To get started:
+        sovstack init
+        sovstack --help
+
+      An example config has been installed to:
+        #{HOMEBREW_PREFIX}/share/sovstack/sovstack.yaml.example
+
+      For Docker-backed model deployment, install Docker Desktop or colima.
+
+release:
+  github:
+    owner: sovereignstack
+    name: sovereignstack
+  draft: false
+  prerelease: auto    # marks v1.0.0-rc.1 etc. as prerelease automatically
+  name_template: "v{{ .Version }}"
+  header: |
+    ## SovereignStack {{ .Version }}
+
+    See [CHANGELOG.md](https://github.com/sovereignstack/sovereignstack/blob/main/CHANGELOG.md) for the full notes.
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'merge conflict'
+  groups:
+    - title: 'Features'
+      regexp: '^.*?(feat)(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug fixes'
+      regexp: '^.*?(fix)(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Other'
+      order: 999
