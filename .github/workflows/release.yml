@@ -1,8 +1,8 @@
 name: Release
 
-# Triggered by pushing a SemVer tag to the OSS repo. Builds Linux + macOS
-# binaries (amd64 + arm64), publishes a GitHub Release, ships .deb/.rpm/.apk
-# packages, and updates the Homebrew tap.
+# Triggered by pushing a SemVer tag. v1.0.0 ships Linux/amd64 only.
+# macOS and linux/arm64 will return in v1.1.0; the Homebrew tap is
+# disabled in .goreleaser.yaml until then.
 
 on:
   push:
@@ -27,15 +27,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          # Track go.mod's toolchain directive so the release uses the
+          # patched 1.25.x runtime, matching CI.
+          go-version-file: go.mod
           cache: true
-
-      # CGO is required by the SQLite driver. Default Ubuntu has gcc + glibc
-      # for amd64; for arm64 cross-compile we install the cross-toolchain.
-      - name: Install cross-compile toolchain (arm64)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6
@@ -44,8 +39,5 @@ jobs:
           version: latest
           args: release --clean
         env:
-          # Built-in: lets GoReleaser create the Release in this repo.
+          # Built-in token; lets GoReleaser create the Release in this repo.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Add this in the repo's Secrets settings. Fine-grained PAT with
-          # `contents: write` on the homebrew-tap repo. See SETUP_RELEASES.md.
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
