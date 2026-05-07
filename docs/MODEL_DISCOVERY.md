@@ -244,5 +244,5 @@ A: Either it's incompatible with your hardware, or not yet tested by the communi
 
 **See Also:**
 - [Quick Start Guide](./QUICKSTART.md)
-- [Command Reference](./COMMANDS.md)
+- [Command Reference](./CLI_REFERENCE.md)
 - [Model Management Guide](./MODEL_MANAGEMENT.md)

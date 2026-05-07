@@ -87,5 +87,5 @@
 
 **See Also:**
 - [Quick Start Guide](./QUICKSTART.md)
-- [Command Reference](./COMMANDS.md) — `gateway`, `keys`
+- [Command Reference](./CLI_REFERENCE.md) — `gateway`, `keys`
 - [Model Management Guide](./MODEL_MANAGEMENT.md) *(Coming Soon)*

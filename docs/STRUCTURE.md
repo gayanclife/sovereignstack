@@ -28,7 +28,6 @@ sovereignstack/
 ├── go.mod                          # Go dependencies
 ├── go.sum                          # Dependency lock file
 ├── README.md                       # Documentation
-├── PRD.md                          # Product Requirements Document
 ├── .gitignore                      # Git ignore rules
 └── docker-compose.yml              # Docker Compose configuration
 
