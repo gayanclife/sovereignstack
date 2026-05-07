@@ -197,8 +197,8 @@ func (d *HFDownloader) downloadFile(url, destPath string, totalSize int64, model
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
 	}
 
-	// Open file for writing (append if resuming)
-	flags := os.O_WRONLY | os.O_CREATE
+	// Open file for writing (append if resuming).
+	var flags int
 	if startByte > 0 {
 		flags = os.O_APPEND | os.O_WRONLY
 	} else {
@@ -298,42 +298,5 @@ func validateSafetensorsFile(filePath string) error {
 	return nil
 }
 
-// isModelFile checks if a file is a model weight file (not metadata)
-func isModelFile(filename string) bool {
-	// Include model files
-	if strings.HasSuffix(filename, ".safetensors") {
-		return true
-	}
-	if strings.HasSuffix(filename, ".bin") {
-		return true
-	}
-	if strings.HasSuffix(filename, ".pt") {
-		return true
-	}
-	if strings.HasSuffix(filename, ".pth") {
-		return true
-	}
-	if strings.HasSuffix(filename, ".gguf") {
-		return true
-	}
-
-	// Exclude metadata files
-	if filename == ".gitattributes" {
-		return false
-	}
-	if strings.HasSuffix(filename, ".md") {
-		return false
-	}
-	if strings.HasSuffix(filename, ".json") && !strings.Contains(filename, ".safetensors") {
-		return false
-	}
-	if filename == "README.md" {
-		return false
-	}
-	if filename == "LICENSE" {
-		return false
-	}
-
-	// For other files, be conservative (include only known weight formats)
-	return false
-}
+// (isModelFile was a planned filter for selective downloads but never
+// wired into the download path; removed to clear unused-code lint.)

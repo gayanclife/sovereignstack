@@ -224,30 +224,10 @@ func (s *Service) handleLogout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// SessionRoleFromRequest returns ("admin", true) when the request carries
-// a valid session cookie whose claim value matches "admin". Otherwise
-// ("", false). Used by checkAdminAuth as a session-based alternative to
-// Bearer admin keys.
-func (s *Service) sessionRoleFromRequest(r *http.Request) (string, bool) {
-	if s.oidc == nil {
-		return "", false
-	}
-	cookie, err := r.Cookie("sovstack_session")
-	if err != nil {
-		return "", false
-	}
-	sid, ok := verifySession(cookie.Value, s.oidc.cfg.SessionSecret)
-	if !ok {
-		return "", false
-	}
-	s.oidc.mu.RLock()
-	sess, ok := s.oidc.sessions[sid]
-	s.oidc.mu.RUnlock()
-	if !ok || time.Now().After(sess.expires) {
-		return "", false
-	}
-	return sess.role, true
-}
+// sessionRoleFromRequest used to resolve the admin role from a session
+// cookie. Phase C4 superseded it with actorFromOIDCSession in admins.go,
+// which returns the OIDC subject (richer audit attribution) and applies
+// the same expiry / role checks. Removed to clear `unused` lint findings.
 
 // signSession returns sid|HMAC-SHA256(secret, sid), base64-encoded.
 func signSession(sid string, secret []byte) string {
