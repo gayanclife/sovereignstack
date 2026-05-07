@@ -15,7 +15,10 @@ project_name: sovstack
 before:
   hooks:
     - go mod tidy
-    - go test ./...
+    # Skip core/engine — its integration tests assume a clean Docker
+    # state and can fail when ss-* containers from prior deploys are
+    # running. CI applies the same exclusion (.github/workflows/ci.yml).
+    - sh -c 'go test -count=1 -timeout=10m $(go list ./... | grep -v /core/engine)'
 
 builds:
   - id: sovstack
@@ -23,13 +26,13 @@ builds:
     binary: sovstack
     env:
       - CGO_ENABLED=1   # required for github.com/mattn/go-sqlite3
+    # v1.0.0 ships Linux/amd64 only — the only platform that's been
+    # tested. macOS (amd64 + arm64) and linux/arm64 will return in a
+    # follow-up minor release once hardware is available to verify on.
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
-      - arm64
-    # Skip combinations that aren't realistic for our users.
     ignore: []
     # `-s -w` strips symbols and DWARF info — about 30% smaller binary.
     # ldflags inject the version into a `version` package; if you don't
@@ -54,9 +57,9 @@ archives:
       - CHANGELOG.md
       - sovstack.yaml.example
       - docs/QUICKSTART.md
-    format_overrides:
-      - goos: windows
-        formats: ["zip"]
+    # No format overrides needed — Linux only ships .tar.gz, which is
+    # the default. Windows .zip handling will return when we re-add
+    # darwin/windows targets.
 
 checksum:
   name_template: 'checksums.txt'
@@ -97,43 +100,39 @@ nfpms:
     suggests:
       - redis-server
 
-# Homebrew tap. Creates / updates a formula in a separate repo named
-# `homebrew-tap` under the same GitHub owner. Users install with:
-#   brew tap sovereignstack/tap
-#   brew install sovstack
-brews:
-  - name: sovstack
-    repository:
-      owner: sovereignstack
-      name: homebrew-tap
-      branch: main
-      # The token used to push to the tap repo. Set as a GitHub secret
-      # (HOMEBREW_TAP_GITHUB_TOKEN) — a fine-grained PAT with contents:
-      # write on the tap repo only.
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: https://github.com/sovereignstack/sovereignstack
-    description: Self-hosted LLM serving with auth, quotas, audit, and Prometheus metrics
-    license: Apache-2.0
-    install: |
-      bin.install "sovstack"
-      pkgshare.install "sovstack.yaml.example"
-      doc.install "README.md", "CHANGELOG.md", "LICENSE"
-    test: |
-      assert_match "SovereignStack", shell_output("#{bin}/sovstack --help")
-    # Run by `brew install` to print first-use instructions.
-    caveats: |
-      To get started:
-        sovstack init
-        sovstack --help
-
-      An example config has been installed to:
-        #{HOMEBREW_PREFIX}/share/sovstack/sovstack.yaml.example
-
-      For Docker-backed model deployment, install Docker Desktop or colima.
+# Homebrew tap is disabled in v1.0.0 — macOS isn't shipped this release.
+# Re-enable in v1.1.0 once macOS binaries are tested. The full block is
+# kept below (commented) so the diff to re-enable is one line.
+#
+# brews:
+#   - name: sovstack
+#     repository:
+#       owner: sovereignstack
+#       name: homebrew-tap
+#       branch: main
+#       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+#     homepage: https://github.com/sovereignstack/sovereignstack
+#     description: Self-hosted LLM serving with auth, quotas, audit, and Prometheus metrics
+#     license: Apache-2.0
+#     install: |
+#       bin.install "sovstack"
+#       pkgshare.install "sovstack.yaml.example"
+#       doc.install "README.md", "CHANGELOG.md", "LICENSE"
+#     test: |
+#       assert_match "SovereignStack", shell_output("#{bin}/sovstack --help")
+#     caveats: |
+#       To get started:
+#         sovstack init
+#         sovstack --help
+#
+#       An example config has been installed to:
+#         #{HOMEBREW_PREFIX}/share/sovstack/sovstack.yaml.example
+#
+#       For Docker-backed model deployment, install Docker Desktop or colima.
 
 release:
   github:
-    owner: sovereignstack
+    owner: gayanclife
     name: sovereignstack
   draft: false
   prerelease: auto    # marks v1.0.0-rc.1 etc. as prerelease automatically
@@ -141,7 +140,10 @@ release:
   header: |
     ## SovereignStack {{ .Version }}
 
-    See [CHANGELOG.md](https://github.com/sovereignstack/sovereignstack/blob/main/CHANGELOG.md) for the full notes.
+    Linux/amd64 only in this initial release. macOS and linux/arm64
+    will land in a follow-up minor release.
+
+    See [CHANGELOG.md](https://github.com/gayanclife/sovereignstack/blob/main/CHANGELOG.md) for the full notes.
 
 changelog:
   sort: asc
