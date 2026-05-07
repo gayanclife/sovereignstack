@@ -1,0 +1,47 @@
+name: Release (macOS beta)
+
+# Triggered by pushing a SemVer pre-release tag with -beta in it.
+# Builds darwin/amd64 + darwin/arm64 from a macOS runner so CGO
+# (sqlite) cross-compiles between Apple architectures natively
+# without osxcross.
+#
+# Linux artifacts come from the main .github/workflows/release.yml,
+# which fires on stable tags (v1.0.x) and uses .goreleaser.yaml.
+
+on:
+  push:
+    tags:
+      - "v*-beta*"
+      - "v*-beta.*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser-darwin:
+    name: Build, test, release (darwin)
+    # macos-latest is currently arm64 hardware. CGO cross-compile to
+    # darwin/amd64 works natively because the Xcode toolchain ships
+    # both architectures.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run GoReleaser (beta config)
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          args: release --clean --config .goreleaser-beta.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

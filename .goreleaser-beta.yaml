@@ -1,0 +1,101 @@
+# GoReleaser config for the macOS beta channel.
+#
+# Builds darwin/amd64 + darwin/arm64 ONLY — Linux artefacts continue to
+# come from the v1.0.x series via the main .goreleaser.yaml. This is a
+# pre-release stream that runs on a macOS GitHub runner so CGO (sqlite)
+# cross-compiles between Apple architectures without osxcross.
+#
+# Triggered by `git push origin vX.Y.Z-beta.N` from the
+# release/v1.1.0-beta-macos branch. GoReleaser auto-marks SemVer
+# pre-release tags as GitHub prereleases (see `release.prerelease: auto`).
+
+version: 2
+
+project_name: sovstack
+
+before:
+  hooks:
+    - go mod tidy
+    # Match CI's exclusion of core/engine — those tests assume a clean
+    # Docker state and aren't suitable for build-time gating.
+    - sh -c 'go test -count=1 -timeout=10m $(go list ./... | grep -v /core/engine)'
+
+builds:
+  - id: sovstack-darwin
+    main: .
+    binary: sovstack
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .CommitDate }}
+
+archives:
+  - id: tarball
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - sovstack.yaml.example
+      - docs/QUICKSTART.md
+
+checksum:
+  name_template: 'checksums-darwin.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-beta-snap"
+
+release:
+  github:
+    owner: gayanclife
+    name: sovereignstack
+  draft: false
+  prerelease: true     # always a prerelease for the beta channel
+  name_template: "v{{ .Version }}"
+  header: |
+    ## SovereignStack {{ .Version }} (macOS beta)
+
+    Pre-release. macOS binaries only. Linux users should stay on the
+    latest `v1.0.x` line until the macOS surface is validated and a
+    final v1.1.0 lands.
+
+    ```bash
+    # Apple silicon
+    curl -sSL -o sovstack.tar.gz \
+      https://github.com/gayanclife/sovereignstack/releases/download/v{{ .Version }}/sovstack_{{ .Version }}_darwin_arm64.tar.gz
+    tar -xzf sovstack.tar.gz
+    ./sovstack --version
+    ```
+
+    Found a Mac-specific issue? File at
+    https://github.com/gayanclife/sovereignstack/issues with label
+    `os:macos` and the `v{{ .Version }}` tag.
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+  groups:
+    - title: 'macOS-specific'
+      regexp: '^.*?(macos|darwin|brew):.+$'
+      order: 0
+    - title: 'Other'
+      order: 999
