@@ -60,7 +60,7 @@ func GetRunningModels(ctx context.Context) ([]RunningModel, error) {
 	if err != nil {
 		errMsg := string(output)
 		if strings.Contains(errMsg, "permission denied") {
-			return nil, fmt.Errorf("Docker permission denied. Try: sudo usermod -aG docker $USER\nOr run with: sudo sovstack")
+			return nil, fmt.Errorf("docker permission denied; try: sudo usermod -aG docker $USER (or run with: sudo sovstack)")
 		}
 		return nil, fmt.Errorf("failed to query Docker: %v (output: %s)", err, errMsg)
 	}

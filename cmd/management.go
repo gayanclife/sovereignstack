@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -185,47 +184,9 @@ func runManagement(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func handleRunningModels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	ctx := context.Background()
-	runningModels, err := docker.GetRunningModels(ctx)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error": "%v"}`, err), http.StatusInternalServerError)
-		return
-	}
-
-	// Convert to response format
-	models := make([]ModelResponse, 0, len(runningModels))
-	for _, m := range runningModels {
-		models = append(models, ModelResponse{
-			Name:        m.ModelName,
-			ContainerID: m.ContainerID[:12], // Short ID for readability
-			Type:        m.Type,
-			Status:      m.Status,
-			Port:        m.Port,
-		})
-	}
-
-	response := RunningModelsResponse{
-		Version: "1.0",
-		Models:  models,
-		Count:   len(models),
-	}
-
-	json.NewEncoder(w).Encode(response)
-}
-
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	response := HealthResponse{
-		Status: "ok",
-		Ready:  true,
-	}
-
-	json.NewEncoder(w).Encode(response)
-}
+// (handleRunningModels and handleHealth were the in-monolith handlers
+// before Phase E. They were superseded by core/management/discovery
+// which the management shim mounts via discoverySvc.Register(mgmtMux).)
 
 // vllmMetricsClient is a shared HTTP client for vLLM metrics scraping.
 var vllmMetricsClient = &http.Client{Timeout: 5 * time.Second}
@@ -306,172 +267,8 @@ func handleModelMetrics(w http.ResponseWriter, r *http.Request, modelName string
 	io.Copy(w, resp.Body)
 }
 
-// checkAdminAuth verifies the admin API key.
-func checkAdminAuth(r *http.Request) bool {
-	if adminKey == "" {
-		return true
-	}
-	auth := r.Header.Get("Authorization")
-	expected := "Bearer " + adminKey
-	return auth == expected
-}
-
-// handleUsers handles GET /api/v1/users and user-specific operations.
-//
-// Path layout after Split("/"):
-//   /api/v1/users          → parts = ["", "api", "v1", "users"]                       (len 4)
-//   /api/v1/users/{id}     → parts = ["", "api", "v1", "users", "{id}"]               (len 5)
-//   /api/v1/users/{id}/models/{model} → parts = [..., "models", "{model}"]            (len 7)
-//   /api/v1/users/{id}/quota          → parts = [..., "quota"]                        (len 6)
-func handleUsers(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	parts := strings.Split(r.URL.Path, "/")
-	if len(parts) < 4 {
-		http.Error(w, `{"error":"invalid path"}`, http.StatusBadRequest)
-		return
-	}
-
-	// Bare /api/v1/users (no user id) — list-all endpoint.
-	if len(parts) == 4 || (len(parts) == 5 && parts[4] == "") {
-		if r.Method != http.MethodGet {
-			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-			return
-		}
-		if !checkAdminAuth(r) {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
-
-		users := keyStore.ListUsers()
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"users": users,
-			"count": len(users),
-		})
-		return
-	}
-
-	userID := parts[4]
-	user, _ := keyStore.GetByID(userID)
-	if user == nil {
-		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
-		return
-	}
-
-	// Check for model operations: /api/v1/users/{id}/models/{model}
-	if len(parts) >= 7 && parts[5] == "models" {
-		model := parts[6]
-
-		if !checkAdminAuth(r) {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
-
-		switch r.Method {
-		case http.MethodPost:
-			// Grant model access
-			if err := keyStore.GrantModelAccess(userID, model); err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status": "ok",
-				"action": "granted",
-				"model":  model,
-			})
-
-		case http.MethodDelete:
-			// Revoke model access
-			if err := keyStore.RevokeModelAccess(userID, model); err != nil {
-				http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]string{
-				"status": "ok",
-				"action": "revoked",
-				"model":  model,
-			})
-
-		default:
-			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		}
-		return
-	}
-
-	// Check for quota operations: /api/v1/users/{id}/quota
-	if len(parts) >= 6 && parts[5] == "quota" {
-		if r.Method != http.MethodPatch {
-			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-			return
-		}
-
-		if !checkAdminAuth(r) {
-			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-			return
-		}
-
-		var req struct {
-			MaxTokensPerDay   int64 `json:"max_tokens_per_day"`
-			MaxTokensPerMonth int64 `json:"max_tokens_per_month"`
-		}
-
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
-			return
-		}
-
-		if err := keyStore.SetQuota(userID, req.MaxTokensPerDay, req.MaxTokensPerMonth); err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":"%v"}`, err), http.StatusBadRequest)
-			return
-		}
-
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":                "ok",
-			"max_tokens_per_day":    req.MaxTokensPerDay,
-			"max_tokens_per_month":  req.MaxTokensPerMonth,
-		})
-		return
-	}
-
-	// GET /api/v1/users/{id} — get user profile
-	if r.Method == http.MethodGet {
-		json.NewEncoder(w).Encode(user)
-		return
-	}
-
-	http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-}
-
-// handleAccessCheck handles GET /api/v1/access/check?user={id}&model={model}
-func handleAccessCheck(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
-
-	userID := r.URL.Query().Get("user")
-	model := r.URL.Query().Get("model")
-
-	if userID == "" || model == "" {
-		http.Error(w, `{"error":"missing user or model parameter"}`, http.StatusBadRequest)
-		return
-	}
-
-	allowed := keyStore.CanAccess(userID, model)
-	statusCode := http.StatusOK
-	if !allowed {
-		statusCode = http.StatusForbidden
-	}
-
-	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"user":    userID,
-		"model":   model,
-		"allowed": allowed,
-	})
-}
+// (handleUsers, checkAdminAuth, and handleAccessCheck were the
+// in-monolith handlers before Phase E. They were superseded by
+// core/management/policy which the management shim mounts via
+// policySvc.Register(mgmtMux). Removed to clear `unused` lint
+// findings.)

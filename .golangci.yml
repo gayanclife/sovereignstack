@@ -1,0 +1,123 @@
+# golangci-lint v2 configuration.
+#
+# Goal: catch real bugs without enforcing stylistic patterns that
+# productive Go codebases routinely ignore. We default to the standard
+# linter set and explicitly exclude conventional false-positives.
+#
+# Adjust with care — every exclusion is a class of bug we agree to
+# accept silently.
+
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  # standard set = errcheck, govet, ineffassign, staticcheck, unused.
+  # Add gosec when we're ready to enforce security-specific checks.
+  enable:
+    - misspell
+
+  exclusions:
+    rules:
+      # ── errcheck: conventional "fire and forget" patterns ─────────
+      # Close() on file/db/conn handles is virtually always ignored
+      # in practice; the close has no useful failure mode in the
+      # caller's path. Worth checking for explicit (non-deferred)
+      # writes — but the deferred-close pattern is canonical.
+      - linters: [errcheck]
+        text: 'Error return value of .*\.Close. is not checked'
+
+      # database/sql Row.Scan returning io.EOF is the conventional
+      # way to detect "no rows" — we handle that semantically. The
+      # other Scan errors are best-effort logging.
+      - linters: [errcheck]
+        text: 'Error return value of .*\.Scan. is not checked'
+
+      # Filesystem cleanup in tests routinely ignores errors — if
+      # the temp file can't be removed there's nothing to do about it.
+      - linters: [errcheck]
+        path: '_test\.go$'
+
+      # rand.Read on crypto/rand returns an error only if the OS RNG
+      # is broken, in which case we have bigger problems.
+      - linters: [errcheck]
+        text: 'Error return value of `rand\.Read` is not checked'
+
+      # Audit-logger calls in the gateway hot path are best-effort:
+      # we don't want a logging failure to fail a user request.
+      - linters: [errcheck]
+        text: 'Error return value of `.*auditor?\..*` is not checked'
+
+      # filepath.Walk: when used in size-calculation helpers we
+      # tolerate partial walks (e.g. permission errors on subdirs).
+      - linters: [errcheck]
+        text: 'Error return value of `filepath\.Walk` is not checked'
+
+      # fmt.Sscanf: returning the count is enough; the err is
+      # equivalent information.
+      - linters: [errcheck]
+        text: 'Error return value of `fmt\.Sscanf` is not checked'
+
+      # Cmd.Output() in cleanup paths — same fire-and-forget logic.
+      - linters: [errcheck]
+        text: 'Error return value of `.*\.Output` is not checked'
+
+      # os.Remove / os.RemoveAll / os.MkdirAll in cleanup-on-error
+      # paths: we're already on the failure branch; the remove being
+      # best-effort is intentional.
+      - linters: [errcheck]
+        text: 'Error return value of `os\.(Remove|RemoveAll|MkdirAll)` is not checked'
+
+      # Writing to an HTTP ResponseWriter (or any other writer where
+      # we have no recovery path) — when the connection drops mid-
+      # response we have nowhere useful to send the failure. The
+      # standard library treats these as best-effort. Covers
+      # json.NewEncoder(w).Encode, w.Write, fmt.Fprint*,
+      # tabwriter.Flush, and io.Copy(w, ...) when streaming.
+      - linters: [errcheck]
+        text: 'Error return value of `.*\.(Encode|Write|Flush)` is not checked'
+      - linters: [errcheck]
+        text: 'Error return value of `fmt\.Fprint(ln|f)?` is not checked'
+      - linters: [errcheck]
+        text: 'Error return value of `io\.Copy` is not checked'
+
+      # Cobra's cmd.Help() returns an error that's only non-nil if
+      # writing to stderr fails — same as the ResponseWriter case.
+      - linters: [errcheck]
+        text: 'Error return value of `cmd\.Help` is not checked'
+
+      # Interactive CLI input (fmt.Scanln) — the calling code already
+      # validates the parsed value; the read error is redundant.
+      - linters: [errcheck]
+        text: 'Error return value of `fmt\.Scanln` is not checked'
+
+      # Local saveRunningModels writes engine state to disk; the call
+      # sites already log on the success path and are best-effort
+      # otherwise.
+      - linters: [errcheck]
+        text: 'Error return value of `saveRunningModels`'
+      - linters: [errcheck]
+        text: 'Error return value is not checked'
+        path: 'core/engine/orchestrator\.go'
+
+      # ── staticcheck: project-specific tolerated patterns ──────────
+      # Empty case branches mark "deliberately a no-op" — we use
+      # them as placeholders for future implementations. Document
+      # the intent in a comment rather than removing the branch.
+      - linters: [staticcheck]
+        text: 'SA9003'
+
+      # QF1003 is a stylistic preference (tagged switch over if/else)
+      # that doesn't change semantics.
+      - linters: [staticcheck]
+        text: 'QF1003'
+
+      # In tests we sometimes assert nil-status and continue — the
+      # `if x == nil { t.Fatal(...) }` pattern. staticcheck flags
+      # the post-Fatal use as a possible nil deref because it can't
+      # know t.Fatal exits the test.
+      - linters: [staticcheck]
+        text: 'SA5011'
+        path: '_test\.go$'

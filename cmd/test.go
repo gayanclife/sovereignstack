@@ -267,13 +267,7 @@ func sendTestRequest(port int, prompt string, maxTokens int, temperature float32
 	return content, nil
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+// (min was previously defined locally; Go 1.21+ has a builtin.)
 
 // getKeys returns the keys of a map for debugging
 func getKeys(m map[string]interface{}) []string {

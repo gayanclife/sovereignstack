@@ -93,11 +93,6 @@ func loadRunningModels() map[string]*core.ModelInstance {
 	return models
 }
 
-// clearRunningModels removes the running models file
-func clearRunningModels() error {
-	file := getRunningModelsFile()
-	if _, err := os.Stat(file); os.IsNotExist(err) {
-		return nil // File doesn't exist, nothing to do
-	}
-	return os.Remove(file)
-}
+// (clearRunningModels was unused; the on-disk state file is invalidated
+// by Stop() rewriting it with a smaller running set, so an explicit
+// clear is unnecessary.)
