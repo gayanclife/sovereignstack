@@ -6,7 +6,14 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      # Stable SemVer tags only. Beta tags (v*-beta*) are routed to
+      # release-beta.yml; the negation prevents both workflows from
+      # firing on the same tag and racing on the same Release URL.
+      - 'v*'
+      - '!v*-beta*'
+      - '!v*-rc*'
+      - '!v*-alpha*'
 
 permissions:
   contents: write   # GoReleaser needs this to create the GitHub Release
