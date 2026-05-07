@@ -117,11 +117,16 @@ func CheckDocker() bool {
 	return err == nil
 }
 
-// GetSystemRAM returns total system RAM in bytes
+// GetSystemRAM returns total system RAM in bytes.
+//
+// Linux:   read /proc/meminfo MemTotal.
+// macOS:   shell out to `sysctl -n hw.memsize`.
+// Other:   fall back to runtime.MemStats.Sys (Go heap/stack only — not
+//          accurate, but better than 0). Callers wanting real numbers on
+//          BSD/Solaris/Windows can extend this function.
 func GetSystemRAM() int64 {
-	// Try reading from /proc/meminfo on Linux
-	file, err := os.Open("/proc/meminfo")
-	if err == nil {
+	// Linux path.
+	if file, err := os.Open("/proc/meminfo"); err == nil {
 		defer file.Close()
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
@@ -137,8 +142,17 @@ func GetSystemRAM() int64 {
 		}
 	}
 
-	// Fallback: use runtime package (returns bytes allocated to Go runtime)
-	// This is not accurate for total system RAM but better than 0
+	// macOS / Darwin path.
+	if runtime.GOOS == "darwin" {
+		out, err := exec.Command("sysctl", "-n", "hw.memsize").Output()
+		if err == nil {
+			if n, parseErr := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64); parseErr == nil && n > 0 {
+				return n
+			}
+		}
+	}
+
+	// Last-resort fallback. Inaccurate but non-zero.
 	m := runtime.MemStats{}
 	runtime.ReadMemStats(&m)
 	return int64(m.Sys)
