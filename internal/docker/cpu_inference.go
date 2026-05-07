@@ -37,18 +37,86 @@ COPY server.py /server.py
 CMD ["python", "/server.py"]
 `
 
-const cpuServerPython = `from fastapi import FastAPI
+// Generic, model-agnostic inference server. Detects the model's capability
+// from config.architectures, loads it with the matching AutoModelFor* class
+// on the first try, and only registers the endpoints the model can serve.
+const cpuServerPython = `from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from transformers import pipeline, AutoModel, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
+import transformers
 import uvicorn
 import os
-import torch
-import logging
+import sys
 import time
+import logging
+import torch
 
-logging.basicConfig(level=logging.INFO)
-app = FastAPI()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+log = logging.getLogger("sovstack")
 
+model_path = os.environ.get("MODEL_PATH", "/model")
+model_name = os.path.basename(model_path) or "model"
+
+# Map architecture suffix -> (capability, transformers AutoModel class).
+# First match wins; order matters because some suffixes are sub-strings of others.
+ARCH_MAP = [
+    ("ForCausalLM",                "generative",     "AutoModelForCausalLM"),
+    ("LMHeadModel",                "generative",     "AutoModelForCausalLM"),
+    ("ForConditionalGeneration",   "seq2seq",        "AutoModelForSeq2SeqLM"),
+    ("ForSeq2SeqLM",               "seq2seq",        "AutoModelForSeq2SeqLM"),
+    ("ForSequenceClassification",  "classification", "AutoModelForSequenceClassification"),
+    ("ForTokenClassification",     "classification", "AutoModelForTokenClassification"),
+    ("ForQuestionAnswering",       "classification", "AutoModelForQuestionAnswering"),
+    ("ForMaskedLM",                "encoder",        "AutoModel"),
+]
+
+ENDPOINTS = {
+    "generative":     ["/v1/chat/completions", "/v1/completions"],
+    "seq2seq":        ["/v1/completions"],
+    "encoder":        ["/v1/embeddings"],
+    "classification": ["/v1/classify"],
+}
+
+def detect_capability(config):
+    archs = getattr(config, "architectures", None) or []
+    for arch in archs:
+        for suffix, capability, klass in ARCH_MAP:
+            if arch.endswith(suffix):
+                return capability, klass, arch
+    # Unknown architecture: fall back to plain encoder embeddings, the one
+    # path that works for any transformer with a base hidden state.
+    return "encoder", "AutoModel", (archs[0] if archs else "Unknown")
+
+log.info("loading model '%s' from %s", model_name, model_path)
+try:
+    config = AutoConfig.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
+except Exception as e:
+    log.error("could not read model config: %s", e)
+    sys.exit(1)
+
+capability, model_class_name, arch_used = detect_capability(config)
+log.info("architecture=%s capability=%s loader=%s", arch_used, capability, model_class_name)
+
+try:
+    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True)
+    ModelClass = getattr(transformers, model_class_name)
+    # transformers >= 4.43 prefers 'dtype'; older versions only know 'torch_dtype'.
+    try:
+        model = ModelClass.from_pretrained(
+            model_path, local_files_only=True, dtype=torch.float32, trust_remote_code=True,
+        )
+    except TypeError:
+        model = ModelClass.from_pretrained(
+            model_path, local_files_only=True, torch_dtype=torch.float32, trust_remote_code=True,
+        )
+    model.eval()
+except Exception as e:
+    log.error("model load failed: %s", e)
+    sys.exit(1)
+
+log.info("model ready: capability=%s endpoints=%s", capability, ENDPOINTS[capability])
+
+app = FastAPI(title="sovstack-inference")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -57,245 +125,151 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model_path = os.environ.get("MODEL_PATH", "/model")
-model_name = os.path.basename(model_path)
-print(f"Loading model: {model_name}")
-print(f"From path: {model_path}")
+def count_tokens(text):
+    if isinstance(text, list):
+        return sum(len(tokenizer.encode(t, add_special_tokens=False)) for t in text)
+    return len(tokenizer.encode(text, add_special_tokens=False))
 
-pipe = None
-task_type = None
-tokenizer = None
-model = None
+def messages_to_prompt(messages):
+    parts = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        parts.append(f"{role}: {content}")
+    parts.append("assistant:")
+    return "\n".join(parts)
 
-# Try to load local model directly
-if os.path.exists(model_path):
-    print(f"Found local model at {model_path}")
-    files = os.listdir(model_path)
-    print(f"Files: {files}")
+def generate_text(prompt, max_tokens, temperature):
+    inputs = tokenizer(prompt, return_tensors="pt")
+    pad_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else tokenizer.pad_token_id
+    temp = float(temperature)
+    with torch.no_grad():
+        outputs = model.generate(
+            inputs["input_ids"],
+            max_new_tokens=int(max_tokens),
+            temperature=max(0.1, temp),
+            do_sample=temp > 0,
+            top_p=0.95,
+            pad_token_id=pad_id,
+        )
+    text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    if text.startswith(prompt):
+        text = text[len(prompt):]
+    return text.strip()
 
-    # Check for safetensors file
-    safetensors_files = [f for f in files if f.endswith('.safetensors')]
-    if safetensors_files:
-        for sf in safetensors_files:
-            path = os.path.join(model_path, sf)
-            size = os.path.getsize(path)
-            print(f"  {sf}: {size / 1024 / 1024 / 1024:.2f} GB")
-
-    try:
-        print("Attempting to load model from local path...")
-
-        # Try different loading strategies
-        loading_strategies = [
-            # Strategy 1: Full pipeline load
-            ("text-generation pipeline (local)", lambda: pipeline(
-                "text-generation",
-                model=model_path,
-                local_files_only=True,
-                device=-1,
-                torch_dtype=torch.float32,
-                trust_remote_code=True
-            )),
-            # Strategy 2: Direct AutoModelForCausalLM load (for LLMs)
-            ("AutoModelForCausalLM (local)", lambda: (
-                AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True),
-                __import__('transformers').AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32, trust_remote_code=True)
-            )),
-            # Strategy 3: Direct AutoModel load (fallback for other model types)
-            ("AutoModel (local)", lambda: (
-                AutoTokenizer.from_pretrained(model_path, local_files_only=True, trust_remote_code=True),
-                __import__('transformers').AutoModel.from_pretrained(model_path, local_files_only=True, torch_dtype=torch.float32, trust_remote_code=True)
-            )),
-        ]
-
-        for strategy_name, loader in loading_strategies:
-            try:
-                print(f"  Trying {strategy_name}...")
-                result = loader()
-
-                # Check if result is a pipeline or tuple
-                if isinstance(result, tuple):
-                    tokenizer, model = result
-                    task_type = "direct"
-                    print(f"✓ Loaded with {strategy_name}")
-                    break
-                else:
-                    pipe = result
-                    tokenizer = pipe.tokenizer
-                    model = pipe.model
-                    task_type = "text-generation"
-                    print(f"✓ Loaded with {strategy_name}")
-                    break
-            except Exception as e:
-                err_str = str(e)
-                print(f"    Failed: {err_str}")
-                if "incomplete metadata" in err_str or "file not fully covered" in err_str:
-                    print(f"    → Model file appears incomplete. Try: sovstack pull -f <model_name>")
-                continue
-
-    except Exception as e:
-        print(f"All local loading strategies failed: {str(e)}")
-        print("Attempting fallback strategies...")
+def embed_texts(texts):
+    if not isinstance(texts, list):
+        texts = [texts]
+    inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    last_hidden = outputs.last_hidden_state
+    mask = inputs["attention_mask"].unsqueeze(-1).float()
+    pooled = (last_hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+    pooled = torch.nn.functional.normalize(pooled, p=2, dim=1)
+    return pooled.tolist()
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "model": model_name, "capability": capability}
 
-@app.post("/v1/chat/completions")
-def chat_completions(req: dict):
-    global pipe, task_type, tokenizer, model
-    if pipe is None and model is None:
-        return {"error": f"Failed to load model from {model_path}"}, 500
+@app.get("/v1/models")
+def list_models():
+    return {
+        "object": "list",
+        "data": [{
+            "id": model_name,
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "sovereignstack",
+            "capability": capability,
+            "endpoints": ENDPOINTS[capability],
+        }],
+    }
 
-    messages = req.get("messages", [])
-    if not messages:
-        return {"error": "no messages"}, 400
-
-    prompt = messages[-1].get("content", "")
-    max_tokens = req.get("max_tokens", 256)
-    temperature = req.get("temperature", 0.7)
-
-    try:
-        content = None
-
-        # Handle direct model inference (when pipeline fails but model loads)
-        if task_type == "direct" and model is not None and tokenizer is not None:
-            print(f"Using direct model inference for: {prompt[:50]}...")
-            model.eval()
-            inputs = tokenizer(prompt, return_tensors="pt")
-            print(f"Input shape: {inputs['input_ids'].shape}")
-
-            with torch.no_grad():
-                # Check if model has generate method (text generation models)
-                if hasattr(model, 'generate'):
-                    outputs = model.generate(
-                        inputs["input_ids"],
-                        max_new_tokens=max_tokens,
-                        temperature=max(0.1, temperature),
-                        do_sample=True,
-                        top_p=0.95,
-                        pad_token_id=tokenizer.eos_token_id
-                    )
-                    print(f"Output shape: {outputs.shape}")
-                    generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-                    print(f"Generated text length: {len(generated_text)}")
-                    content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
-                else:
-                    # Classification or embedding model
-                    outputs = model(**inputs)
-                    if hasattr(outputs, 'logits'):
-                        logits = outputs.logits[0]
-                        scores = torch.softmax(logits, dim=-1)
-                        top_idx = torch.argmax(scores).item()
-                        top_score = scores[top_idx].item()
-                        if hasattr(model.config, 'id2label') and model.config.id2label:
-                            label = model.config.id2label[top_idx]
-                        else:
-                            label = f"class_{top_idx}"
-                        content = f"Label: {label} (confidence: {top_score:.2f})"
-                    else:
-                        content = f"Model output: {str(outputs)[:100]}"
-
-        # Handle different pipeline task types
-        elif task_type == "text-generation" and pipe is not None:
-            try:
-                result = pipe(
-                    prompt,
-                    max_new_tokens=max_tokens,
-                    do_sample=True,
-                    temperature=max(0.1, temperature),
-                    truncation=True
-                )
-                if isinstance(result, list) and len(result) > 0:
-                    content = result[0].get("generated_text", str(result[0]))
-                    if content.startswith(prompt):
-                        content = content[len(prompt):].strip()
-                else:
-                    content = str(result)
-            except Exception as pipe_err:
-                print(f"Pipeline failed: {str(pipe_err)[:100]}")
-                # Fall back to direct model inference if pipeline fails
-                if tokenizer is not None and model is not None:
-                    print("Falling back to direct model inference...")
-                    model.eval()
-                    inputs = tokenizer(prompt, return_tensors="pt")
-                    print(f"Input shape: {inputs['input_ids'].shape}")
-                    with torch.no_grad():
-                        # Check if model has generate method (text generation models)
-                        if hasattr(model, 'generate'):
-                            outputs = model.generate(
-                                inputs["input_ids"],
-                                max_new_tokens=max_tokens,
-                                temperature=max(0.1, temperature),
-                                do_sample=True,
-                                top_p=0.95,
-                                pad_token_id=tokenizer.eos_token_id
-                            )
-                            print(f"Output shape: {outputs.shape}")
-                            generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-                            print(f"Generated text length: {len(generated_text)}")
-                            content = generated_text[len(prompt):].strip() if generated_text.startswith(prompt) else generated_text
-                        else:
-                            # Classification or embedding model
-                            outputs = model(**inputs)
-                            if hasattr(outputs, 'logits'):
-                                logits = outputs.logits[0]
-                                scores = torch.softmax(logits, dim=-1)
-                                top_idx = torch.argmax(scores).item()
-                                top_score = scores[top_idx].item()
-                                if hasattr(model.config, 'id2label') and model.config.id2label:
-                                    label = model.config.id2label[top_idx]
-                                else:
-                                    label = f"class_{top_idx}"
-                                content = f"Label: {label} (confidence: {top_score:.2f})"
-                            else:
-                                content = f"Model output: {str(outputs)[:100]}"
-                    task_type = "direct"
-                else:
-                    raise pipe_err
-
-        elif task_type == "text-classification" and pipe is not None:
-            result = pipe(prompt, truncation=True)
-            if isinstance(result, list) and len(result) > 0:
-                label = result[0].get("label", "unknown")
-                score = result[0].get("score", 0)
-                content = f"Label: {label} (confidence: {score:.2f})"
-            else:
-                content = str(result)
-
-        elif task_type == "feature-extraction" and pipe is not None:
-            result = pipe(prompt, truncation=True)
-            content = f"Extracted features"
-
-        elif pipe is not None:  # text2text-generation or other
-            result = pipe(prompt, max_length=max_tokens, do_sample=True, temperature=max(0.1, temperature))
-            if isinstance(result, list) and len(result) > 0:
-                content = result[0].get("generated_text", str(result[0]))
-            else:
-                content = str(result)
-
-        if content is None:
-            return {"error": "Failed to generate response"}, 500
-
+if capability in ("generative", "seq2seq"):
+    @app.post("/v1/chat/completions")
+    def chat_completions(req: dict):
+        messages = req.get("messages") or []
+        if not messages:
+            raise HTTPException(status_code=400, detail="messages required")
+        prompt = messages_to_prompt(messages)
+        text = generate_text(prompt, req.get("max_tokens", 256), req.get("temperature", 0.7))
+        prompt_tokens = count_tokens(prompt)
+        completion_tokens = count_tokens(text)
         return {
             "id": "chatcmpl-cpu",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": req.get("model", "cpu-model"),
+            "model": req.get("model", model_name),
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop"
+                "message": {"role": "assistant", "content": text},
+                "finish_reason": "stop",
             }],
             "usage": {
-                "prompt_tokens": len(prompt.split()),
-                "completion_tokens": len(str(content).split()),
-                "total_tokens": len(prompt.split()) + len(str(content).split())
-            }
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
         }
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return {"error": str(e)}, 500
+
+    @app.post("/v1/completions")
+    def completions(req: dict):
+        prompt = req.get("prompt")
+        if prompt is None:
+            raise HTTPException(status_code=400, detail="prompt required")
+        if isinstance(prompt, list):
+            prompt = prompt[0]
+        text = generate_text(prompt, req.get("max_tokens", 256), req.get("temperature", 0.7))
+        prompt_tokens = count_tokens(prompt)
+        completion_tokens = count_tokens(text)
+        return {
+            "id": "cmpl-cpu",
+            "object": "text_completion",
+            "created": int(time.time()),
+            "model": req.get("model", model_name),
+            "choices": [{"index": 0, "text": text, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+
+if capability == "encoder":
+    @app.post("/v1/embeddings")
+    def embeddings(req: dict):
+        inp = req.get("input")
+        if inp is None:
+            raise HTTPException(status_code=400, detail="input required")
+        vectors = embed_texts(inp)
+        data = [{"object": "embedding", "index": i, "embedding": v} for i, v in enumerate(vectors)]
+        total_tokens = count_tokens(inp)
+        return {
+            "object": "list",
+            "data": data,
+            "model": req.get("model", model_name),
+            "usage": {"prompt_tokens": total_tokens, "total_tokens": total_tokens},
+        }
+
+if capability == "classification":
+    @app.post("/v1/classify")
+    def classify(req: dict):
+        text = req.get("input") or req.get("text") or req.get("prompt")
+        if text is None:
+            raise HTTPException(status_code=400, detail="input required")
+        inputs = tokenizer(text, return_tensors="pt", truncation=True)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        scores = torch.softmax(outputs.logits[0], dim=-1).tolist()
+        id2label = getattr(model.config, "id2label", None) or {}
+        labels = sorted(
+            [{"label": id2label.get(i, f"LABEL_{i}"), "score": s} for i, s in enumerate(scores)],
+            key=lambda x: x["score"],
+            reverse=True,
+        )
+        return {"model": req.get("model", model_name), "labels": labels}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

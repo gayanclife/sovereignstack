@@ -17,6 +17,7 @@ package downloader
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -64,7 +65,9 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 	// Try common model file names and metadata files
 	// Order matters: try weights first, then metadata
 	commonFiles := []string{
-		// Model weights (required)
+		// Model weights (required) — single-file form, used by smaller models.
+		// Sharded weights (e.g. model-00001-of-00002.safetensors) are
+		// discovered dynamically from the model's index manifest below.
 		"model.safetensors",
 		"pytorch_model.bin",
 		"model.bin",
@@ -86,6 +89,14 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 	}
 
 	fmt.Printf("   Checking for model files in %s...\n", modelID)
+
+	// Discover sharded weight files from index manifests (multi-shard models
+	// like Phi-2, Llama-3, Mistral). If found, prepend them so weights are
+	// downloaded before metadata.
+	if shards := d.discoverShardedFiles(modelID); len(shards) > 0 {
+		fmt.Printf("   Detected sharded weights: %d shard(s)\n", len(shards)-1) // -1 for the .index.json
+		commonFiles = append(shards, commonFiles...)
+	}
 
 	modelFileCount := 0
 	for _, filename := range commonFiles {
@@ -147,6 +158,50 @@ func (d *HFDownloader) DownloadModel(modelID string, destDir string) error {
 	fmt.Printf("   ✓ Download complete: %d files\n", modelFileCount)
 	if d.auditor != nil {
 		d.auditor.LogModelDownload(modelID, "success", fmt.Sprintf("%d files", modelFileCount))
+	}
+	return nil
+}
+
+// discoverShardedFiles checks for HuggingFace shard index manifests and
+// returns the shard filenames they reference, plus the index file itself.
+// Returns an empty slice if the model isn't sharded.
+//
+// HuggingFace publishes either model.safetensors.index.json or
+// pytorch_model.bin.index.json for multi-shard models. The schema is:
+//
+//	{"weight_map": {"<param>": "model-00001-of-00002.safetensors", ...}}
+//
+// We collect unique shard names from the weight_map.
+func (d *HFDownloader) discoverShardedFiles(modelID string) []string {
+	for _, indexName := range []string{"model.safetensors.index.json", "pytorch_model.bin.index.json"} {
+		url := fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s", modelID, indexName)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			continue
+		}
+		if d.token != "" {
+			req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", d.token))
+		}
+		resp, err := d.httpClient.Do(req)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		shards := parseShardManifest(body)
+		if len(shards) == 0 {
+			continue
+		}
+		// Include the index manifest so transformers can find shards at load time.
+		shards = append(shards, indexName)
+		return shards
 	}
 	return nil
 }
@@ -250,6 +305,28 @@ func (d *HFDownloader) downloadFile(url, destPath string, totalSize int64, model
 	fmt.Fprintf(os.Stderr, "\n") // newline after progress bar
 
 	return nil
+}
+
+// parseShardManifest extracts unique shard filenames from a HuggingFace
+// weight-map index manifest. Returns nil if the JSON is malformed or the
+// weight_map is empty. Shard order in the result is non-deterministic
+// (Go map iteration); callers should not depend on it.
+func parseShardManifest(body []byte) []string {
+	var idx struct {
+		WeightMap map[string]string `json:"weight_map"`
+	}
+	if err := json.Unmarshal(body, &idx); err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var shards []string
+	for _, shard := range idx.WeightMap {
+		if !seen[shard] {
+			seen[shard] = true
+			shards = append(shards, shard)
+		}
+	}
+	return shards
 }
 
 // validateSafetensorsFile checks if a safetensors file is valid by reading its header
