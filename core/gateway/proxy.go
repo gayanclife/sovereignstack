@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gayanclife/sovereignstack/core/admission"
 	"github.com/gayanclife/sovereignstack/core/audit"
 )
 
@@ -40,6 +42,7 @@ type Gateway struct {
 	accessController AccessController
 	quotaManager     *TokenQuotaManager
 	modelRouter      *ModelRouter
+	admissionCtrl    *admission.Controller
 	Metrics          *GatewayMetrics
 	auditLogger      audit.AuditLogger
 	rateLimiter      *RateLimiter
@@ -49,14 +52,15 @@ type Gateway struct {
 
 // GatewayConfig holds gateway configuration
 type GatewayConfig struct {
-	TargetURL        string            // Backend vLLM service URL (e.g., http://localhost:8000)
-	AuthProvider     AuthProvider      // Custom auth provider
-	AccessController AccessController  // Optional access control (Phase 2)
-	QuotaManager     *TokenQuotaManager // Optional token quota manager (Phase 2b)
-	ModelRouter      *ModelRouter      // Optional model router for multi-model backends (Phase 3)
-	AuditLogger      audit.AuditLogger  // Audit logger
-	RequestsPerMin   float64           // Rate limit: requests per minute (0 = unlimited)
-	APIKeyHeader     string            // Header for API key (default: X-API-Key)
+	TargetURL        string                 // Backend vLLM service URL (e.g., http://localhost:8000)
+	AuthProvider     AuthProvider           // Custom auth provider
+	AccessController AccessController       // Optional access control (Phase 2)
+	QuotaManager     *TokenQuotaManager     // Optional token quota manager (Phase 2b)
+	ModelRouter      *ModelRouter           // Optional model router for multi-model backends (Phase 3)
+	AdmissionCtrl    *admission.Controller  // Optional host-aware circuit breaker (nil disables)
+	AuditLogger      audit.AuditLogger      // Audit logger
+	RequestsPerMin   float64                // Rate limit: requests per minute (0 = unlimited)
+	APIKeyHeader     string                 // Header for API key (default: X-API-Key)
 }
 
 // NewGateway creates a new reverse proxy gateway
@@ -78,6 +82,7 @@ func NewGateway(config GatewayConfig) (*Gateway, error) {
 		accessController: config.AccessController,
 		quotaManager:     config.QuotaManager,
 		modelRouter:      config.ModelRouter,
+		admissionCtrl:    config.AdmissionCtrl,
 		auditLogger:      config.AuditLogger,
 		rateLimiter:      &RateLimiter{limits: make(map[string]*UserRateLimit)},
 		requestsPerMin:   config.RequestsPerMin,
@@ -226,6 +231,26 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 		return
+	}
+
+	// Host-aware admission check (kv-cache pressure + queue depth budget).
+	// Sits AFTER per-user limits so a single user can't bypass user-level
+	// caps via this circuit, and BEFORE the body read so we shed cheaply.
+	if gw.admissionCtrl != nil {
+		if d := gw.admissionCtrl.Allow(modelName); !d.Allow {
+			gw.auditLogger.LogError(userID, r.RequestURI, correlationID,
+				"admission shed: "+d.Reason, http.StatusServiceUnavailable, clientIP)
+			if gw.Metrics != nil {
+				gw.Metrics.RecordAdmissionShed(modelName)
+			}
+			if d.RetryAfter > 0 {
+				w.Header().Set("Retry-After", strconv.Itoa(int(d.RetryAfter.Seconds())))
+			}
+			http.Error(w,
+				fmt.Sprintf(`{"error":"service_unavailable","detail":%q}`, d.Reason),
+				http.StatusServiceUnavailable)
+			return
+		}
 	}
 
 	// Log incoming request

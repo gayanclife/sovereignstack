@@ -455,13 +455,48 @@ sovstack gateway [flags]
 - `--api-key-header NAME` - Header name for API key
 - `--audit-buffer N` - Audit log buffer size
 
+**Admission control flags** (host-aware circuit breaker):
+- `--admission-enabled` - Enable host-aware admission control (default: true)
+- `--admission-hard-cache-pct N` - Reject when GPU kv-cache use is ≥ this percent (default: 95)
+- `--admission-soft-cache-pct N` - Warn when GPU kv-cache use is ≥ this percent (default: 80)
+- `--admission-max-queue-per-gb N` - Max queued requests per GB of host VRAM, fair-shared across running models (default: 4)
+- `--admission-poll-seconds N` - How often per-model metrics are scraped (default: 5)
+
 **Example:**
 ```bash
 sovstack gateway \
   --backend http://localhost:8000 \
   --port 8001 \
   --rate-limit 1000
+
+# Disable admission control entirely (revert to user-level limits only)
+sovstack gateway --admission-enabled=false
+
+# Tighter caps for a smaller GPU
+sovstack gateway --admission-hard-cache-pct 90 --admission-max-queue-per-gb 2
 ```
+
+**What admission control does:**
+
+When enabled, the gateway runs a small adaptive circuit breaker in front
+of every reverse-proxy call. It polls each running model's vLLM `/metrics`
+via the management service, tracks an exponentially-smoothed view of GPU
+kv-cache pressure, and rejects with `503 Service Unavailable` + a
+`Retry-After` header when the host approaches saturation.
+
+The hard cache cap is **dynamic** — it tightens when sustained pressure
+appears and steps back up after the system has been calm. This protects
+against request floods and multi-model deployments collectively
+exceeding the host envelope, even when individual user-level rate limits
+are within budget.
+
+Tuning advice:
+- Smaller GPUs (≤ 12 GB): drop `--admission-max-queue-per-gb` to 2 and
+  `--admission-hard-cache-pct` to 90.
+- Bursty workloads: lower `--admission-soft-cache-pct` to 70 to get
+  earlier warning logs without changing rejection behavior.
+- Set `--admission-enabled=false` to revert to the prior behavior (only
+  user-level rate limit + token quotas active).
 
 ---
 

@@ -51,6 +51,52 @@ type GatewayConfig struct {
 	AuditDB       string      `yaml:"audit_db"       env:"SOVSTACK_AUDIT_DB"`
 	Audit         AuditConfig `yaml:"audit"`
 	Quota         QuotaConfig `yaml:"quota"`
+	Admission     AdmissionConfig `yaml:"admission"`
+}
+
+// AdmissionConfig tunes the host-aware adaptive admission controller that
+// the gateway runs in front of every reverse-proxy call. When Enabled is
+// true, the controller polls each running model's vLLM /metrics via the
+// management service, tracks an EMA of GPU kv-cache pressure, and rejects
+// requests with 503 + Retry-After when the host approaches saturation.
+//
+// All thresholds are percent (0..100) on the gpu_cache_usage_perc gauge.
+// Defaults derive from the host's VRAM (see Defaults below).
+type AdmissionConfig struct {
+	// Enabled is the master switch. When false, the gateway admits all
+	// requests regardless of host state (preserves prior behavior).
+	Enabled bool `yaml:"enabled" env:"SOVSTACK_ADMISSION_ENABLED"`
+
+	// HardCachePct is the upper bound on dynamic kv-cache cap (default 95).
+	HardCachePct float64 `yaml:"hard_cache_pct" env:"SOVSTACK_ADMISSION_HARD_CACHE_PCT"`
+
+	// SoftCachePct is the warn-only threshold below the hard cap (default 80).
+	SoftCachePct float64 `yaml:"soft_cache_pct" env:"SOVSTACK_ADMISSION_SOFT_CACHE_PCT"`
+
+	// MinHardCachePct floors the dynamic cap so it can't drift below
+	// this value under sustained stress (default 60).
+	MinHardCachePct float64 `yaml:"min_hard_cache_pct" env:"SOVSTACK_ADMISSION_MIN_HARD_CACHE_PCT"`
+
+	// StressMargin is how far the dynamic cap drops on a stress event
+	// and steps back up by half on each calm window (default 10).
+	StressMargin float64 `yaml:"stress_margin" env:"SOVSTACK_ADMISSION_STRESS_MARGIN"`
+
+	// MaxQueuePerGB caps queued vLLM requests per GB of host VRAM,
+	// fair-shared across running models (default 4).
+	MaxQueuePerGB int `yaml:"max_queue_per_gb" env:"SOVSTACK_ADMISSION_MAX_QUEUE_PER_GB"`
+
+	// PollSeconds is how often the controller refreshes its view of
+	// per-model metrics (default 5).
+	PollSeconds int `yaml:"poll_seconds" env:"SOVSTACK_ADMISSION_POLL_SECONDS"`
+
+	// EMAAlpha is the smoothing factor in (0,1] for the cache-usage EMA
+	// (default 0.2).
+	EMAAlpha float64 `yaml:"ema_alpha" env:"SOVSTACK_ADMISSION_EMA_ALPHA"`
+
+	// CalmSeconds is how long the EMA must stay below SoftCachePct
+	// before the dynamic cap relaxes back toward HardCachePct
+	// (default 300 = 5 min).
+	CalmSeconds int `yaml:"calm_seconds" env:"SOVSTACK_ADMISSION_CALM_SECONDS"`
 }
 
 // AuditConfig selects audit log destinations. The gateway can fan out to
@@ -179,6 +225,17 @@ func Defaults() *Config {
 					Addr:      "localhost:6379",
 					KeyPrefix: "sovstack:quota:",
 				},
+			},
+			Admission: AdmissionConfig{
+				Enabled:         true,
+				HardCachePct:    95,
+				SoftCachePct:    80,
+				MinHardCachePct: 60,
+				StressMargin:    10,
+				MaxQueuePerGB:   4,
+				PollSeconds:     5,
+				EMAAlpha:        0.2,
+				CalmSeconds:     300,
 			},
 		},
 		Management: ManagementConfig{
