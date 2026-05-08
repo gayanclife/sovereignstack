@@ -74,7 +74,7 @@ func runPolicy(cmd *cobra.Command, _ []string) error {
 	port, _ := cmd.Flags().GetInt("port")
 	keysPath, _ := cmd.Flags().GetString("keys")
 	if keysPath == "" {
-		keysPath = cfg.Management.KeysFile
+		keysPath = cfg.Policy.KeysFile
 	}
 	if keysPath == "" {
 		home, _ := os.UserHomeDir()
@@ -83,7 +83,7 @@ func runPolicy(cmd *cobra.Command, _ []string) error {
 
 	adminKey, _ := cmd.Flags().GetString("admin-key")
 	if adminKey == "" {
-		adminKey = cfg.Management.AdminKey
+		adminKey = cfg.Policy.AdminKey
 	}
 	if adminKey == "" {
 		adminKey = os.Getenv("SOVSTACK_ADMIN_KEY")
@@ -120,7 +120,7 @@ func runPolicy(cmd *cobra.Command, _ []string) error {
 	// Phase C4: parse named admin tokens from --admin name=token (repeatable)
 	// and config (management.admin_keys map). CLI takes precedence.
 	named := policy.NamedAdmins{}
-	for k, v := range cfg.Management.AdminKeys {
+	for k, v := range cfg.Policy.AdminKeys {
 		named[k] = v
 	}
 	if pairs, _ := cmd.Flags().GetStringSlice("admin"); len(pairs) > 0 {
@@ -155,13 +155,13 @@ func runPolicy(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Phase F1: enable OIDC sign-in if the issuer is configured.
-	if cfg.Management.OIDC.IssuerURL != "" {
+	if cfg.Policy.OIDC.IssuerURL != "" {
 		oidcCfg := policy.OIDCConfig{
-			IssuerURL:    cfg.Management.OIDC.IssuerURL,
-			ClientID:     cfg.Management.OIDC.ClientID,
-			ClientSecret: cfg.Management.OIDC.ClientSecret,
-			RedirectURL:  cfg.Management.OIDC.RedirectURL,
-			AdminClaim:   cfg.Management.OIDC.AdminClaim,
+			IssuerURL:    cfg.Policy.OIDC.IssuerURL,
+			ClientID:     cfg.Policy.OIDC.ClientID,
+			ClientSecret: cfg.Policy.OIDC.ClientSecret,
+			RedirectURL:  cfg.Policy.OIDC.RedirectURL,
+			AdminClaim:   cfg.Policy.OIDC.AdminClaim,
 		}
 		if err := svc.EnableOIDC(cmd.Context(), oidcCfg); err != nil {
 			return fmt.Errorf("oidc: %w", err)

@@ -24,7 +24,7 @@ This enables running multiple model instances on different ports and routing tra
                        ↓
 ┌─────────────────────────────────────────────────────────────┐
 │  Create ModelRouter                                          │
-│  url: management-url (default: http://localhost:8888)        │
+│  url: discovery-url (default: http://localhost:8889)         │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ↓
@@ -36,7 +36,7 @@ This enables running multiple model instances on different ports and routing tra
                       │
                       ↓
         ┌──────────────────────────────┐
-        │ GET http://localhost:8888    │
+        │ GET http://localhost:8889    │
         │ /api/v1/models/running          │
         └────────────┬─────────────────┘
                      │
@@ -142,14 +142,14 @@ sovstack deploy llama-3-8b --port 8002
 ### Start Gateway with Model Router
 
 ```bash
-# Default: polls http://localhost:8888/api/v1/models/running every 30s
+# Default: polls http://localhost:8889/api/v1/models/running every 30s
 sovstack gateway \
   --backend http://localhost:8000 \
-  --management-url http://localhost:8888 \
+  --discovery-url http://localhost:8889 \
   --keys ~/.sovereignstack/keys.json
 
 # Output:
-# Model Router: Enabled (Phase 3, polling http://localhost:8888 every 30s)
+# Model Router: Enabled (Phase 3, polling http://localhost:8889 every 30s)
 # Registered Models: 3
 ```
 
@@ -159,7 +159,7 @@ sovstack gateway \
 # If management service runs on different host
 sovstack gateway \
   --backend http://localhost:8000 \
-  --management-url http://remote-management.example.com:9000 \
+  --discovery-url http://remote-management.example.com:9000 \
   --keys ~/.sovereignstack/keys.json
 ```
 
@@ -174,7 +174,7 @@ sovstack gateway \
 
 # Start gateway
 sovstack gateway \
-  --management-url http://localhost:8888 \
+  --discovery-url http://localhost:8889 \
   --keys ~/.sovereignstack/keys.json
 
 # Test: Route to mistral-7b (port 8000)
@@ -222,7 +222,7 @@ curl -H "X-API-Key: sk_alice_..." \
 
 ```bash
 # Start gateway
-sovstack gateway --management-url http://localhost:8888
+sovstack gateway --discovery-url http://localhost:8889
 
 # In another terminal, deploy a new model
 sovstack deploy new-model --port 8003
@@ -257,9 +257,9 @@ sovstack deploy new-model --port 8003
 ### Gateway Flags (Phase 3)
 
 ```bash
---management-url string
+--discovery-url string
     Management service URL for model discovery
-    (default "http://localhost:8888")
+    (default "http://localhost:8889")
     
     Used to poll: GET /api/v1/models/running
     Every 30 seconds
@@ -267,7 +267,7 @@ sovstack deploy new-model --port 8003
 
 ### Environment Variables
 
-No new environment variables needed. Model discovery URL is configurable via `--management-url` flag.
+No new environment variables needed. Model discovery URL is configurable via `--discovery-url` flag.
 
 ---
 
@@ -295,7 +295,7 @@ No new environment variables needed. Model discovery URL is configurable via `--
 - Fall back to default backend if model not found
 
 **`cmd/gateway.go` (modified)**
-- Add `--management-url` flag
+- Add `--discovery-url` flag
 - Create and start `ModelRouter`
 - Wire into `GatewayConfig`
 - Print model count on startup
@@ -418,16 +418,16 @@ After validation, remove old, rename new.
 **Diagnosis:**
 ```bash
 # Check management service is running
-curl http://localhost:8888/api/v1/models/running
+curl http://localhost:8889/api/v1/models/running
 # Should return JSON list of models
 
 # Check management URL is correct
-sovstack gateway --management-url http://management-host:port
+sovstack gateway --discovery-url http://management-host:port
 ```
 
 **Solution:**
 1. Ensure management service is running
-2. Verify `--management-url` points to correct host/port
+2. Verify `--discovery-url` points to correct host/port
 3. Check firewall allows gateway → management communication
 
 ### Request Routes to Default Backend Instead of Model
@@ -442,7 +442,7 @@ sovstack gateway --management-url http://management-host:port
 **Solution:**
 ```bash
 # Check if model is running
-curl http://localhost:8888/api/v1/models/running | jq '.models[]'
+curl http://localhost:8889/api/v1/models/running | jq '.models[]'
 
 # Verify exact model name and status
 # Ensure model name matches request path exactly
@@ -460,7 +460,7 @@ curl http://localhost:8888/api/v1/models/running | jq '.models[]'
 **Solution:**
 ```bash
 # Test connectivity
-curl -v http://localhost:8888/api/v1/models/running
+curl -v http://localhost:8889/api/v1/models/running
 # Check response is valid JSON with "models" array
 
 # Check gateway logs for errors
@@ -472,7 +472,7 @@ curl -v http://localhost:8888/api/v1/models/running
 **Symptom:** Backend receives `/models/mistral-7b/v1/chat/completions` instead of `/v1/chat/completions`
 
 **Diagnosis:**
-1. Model router disabled (happens if no `--management-url` provided, but router still created)
+1. Model router disabled (happens if no `--discovery-url` provided, but router still created)
 2. Model name not exactly matching path
 
 **Solution:**
@@ -542,7 +542,7 @@ curl /v1/embeddings         # → localhost:8000
 # Enable multi-model routing
 sovstack gateway \
   --backend http://localhost:8000 \     # fallback only
-  --management-url http://localhost:8888 # model discovery
+  --discovery-url http://localhost:8889 # model discovery
 
 # Route to different backends by model
 curl /models/mistral-7b/v1/chat/completions  # → localhost:8000

@@ -2,63 +2,110 @@
 # SovereignStack — full OSS stack as containers
 # =============================================================================
 #
-# Brings up: management API (8888), gateway (8001), Prometheus (9090),
-# Grafana (3001), node-exporter (9100), cAdvisor (8080).
+# Brings up:
+#   gateway        :8001  request hot path
+#   policy         :8888  user / quota / access REST API (admin-auth)
+#   discovery      :8889  running-models inventory (read-only)
+#   metrics-proxy  :8890  vLLM /metrics by model name (read-only)
+#   prometheus     :9090, grafana :3001, node-exporter :9100, cAdvisor :8080
 #
 # Model (vLLM / llama.cpp) containers are NOT started here — they are
 # launched on demand by `sovstack deploy <model>`, which talks to the
-# Docker daemon directly. The management service discovers them.
+# Docker daemon directly. The discovery service enumerates them.
 #
 # Native (no-Docker) full-stack alternative: ./scripts/start-stack.sh
 # Container-mode wrapper (this file + demo-user seeding + banner):
 #   ./scripts/start-stack-docker.sh
 # =============================================================================
 
+# Anchors so the three management-side services don't drift on shared bits.
+x-mgmt-base: &mgmt-base
+  image: sovereignstack:latest
+  user: "${USER_UID:-1000}:${USER_GID:-1000}"
+  volumes:
+    - ~/.sovereignstack:/data/.sovereignstack
+  environment:
+    - SOVEREIGNSTACK_LOG_DIR=/data/.sovereignstack/logs
+    - SOVSTACK_INSECURE_HTTP=true
+    - HOME=/data
+  restart: unless-stopped
+
 services:
   # ---------------------------------------------------------------------------
-  # Management API (8888) — control plane: discovers Docker model containers,
-  # owns user/quota/access policy, proxies vLLM /metrics by name.
+  # Policy (:8888) — user / quota / access REST API. Owns keys.json. Admin
+  # Bearer required for mutations. The image is built here for all four
+  # services that share it (only this one declares `build:`).
   # ---------------------------------------------------------------------------
-  management:
+  policy:
+    <<: *mgmt-base
     build:
       context: .
       dockerfile: Dockerfile.management
-    image: sovereignstack:latest
-    container_name: sovereignstack-management
-    command: ["management", "--port", "8888", "--keys", "/data/.sovereignstack/keys.json"]
-    # Run as the host user so writes to the bind-mounted ~/.sovereignstack
-    # (keys.json, audit DB) end up host-owned, not root-owned. Set by
-    # scripts/start-stack-docker.sh; falls back to 1000:1000 if invoked via
-    # `docker compose up` directly.
-    user: "${USER_UID:-1000}:${USER_GID:-1000}"
-    # /var/run/docker.sock on most distros is owned by root:docker (660),
-    # so we add the host's docker group GID so management can talk to the
-    # daemon as a non-root user.
-    group_add:
-      - "${DOCKER_GID:-999}"
+    container_name: sovereignstack-policy
+    command: ["policy", "--port", "8888", "--keys", "/data/.sovereignstack/keys.json"]
     ports:
-      - "${MANAGEMENT_PORT:-8888}:8888"
-    volumes:
-      # Docker socket (read-only) — used to enumerate running model containers.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Keystore is the single source of truth for users; management WRITES it
-      # when admin endpoints mutate user/quota/access.
-      - ~/.sovereignstack:/data/.sovereignstack
+      - "${POLICY_PORT:-8888}:8888"
     environment:
       - SOVEREIGNSTACK_LOG_DIR=/data/.sovereignstack/logs
+      - SOVSTACK_INSECURE_HTTP=true
+      - HOME=/data
       - SOVSTACK_ADMIN_KEY=${SOVSTACK_ADMIN_KEY:-}
-      - SOVSTACK_INSECURE_HTTP=true   # compose mode is dev-friendly; flip for prod
-      - HOME=/data  # /data/.sovereignstack is the bind mount; HOME points there for any tool that consults it
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8888/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 5s
-    restart: unless-stopped
 
   # ---------------------------------------------------------------------------
-  # Gateway (8001) — request hot path. Auth → access → quota → rate-limit →
+  # Discovery (:8889) — lists running model containers via the Docker socket.
+  # Read-only, no auth, no state. Adds the host's docker group GID so a
+  # non-root user can talk to /var/run/docker.sock.
+  # ---------------------------------------------------------------------------
+  discovery:
+    <<: *mgmt-base
+    container_name: sovereignstack-discovery
+    command: ["discovery", "--port", "8889"]
+    group_add:
+      - "${DOCKER_GID:-999}"
+    ports:
+      - "${DISCOVERY_PORT:-8889}:8889"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ~/.sovereignstack:/data/.sovereignstack
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8889/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Metrics-proxy (:8890) — proxies vLLM /metrics by model name. Read-only,
+  # no auth, no state. Designed to be the high-traffic Prometheus scrape
+  # target. Needs the docker socket only because it shells out to discover
+  # the {name} → port mapping; same group_add as discovery.
+  # ---------------------------------------------------------------------------
+  metrics-proxy:
+    <<: *mgmt-base
+    container_name: sovereignstack-metrics-proxy
+    command: ["metrics-proxy", "--port", "8890"]
+    group_add:
+      - "${DOCKER_GID:-999}"
+    ports:
+      - "${METRICS_PROXY_PORT:-8890}:8890"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ~/.sovereignstack:/data/.sovereignstack
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8890/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Gateway (:8001) — request hot path. Auth → access → quota → rate-limit →
   # routing → reverse-proxy to model containers → metrics → audit.
   #
   # Uses host networking so the gateway can reach vLLM containers that
@@ -73,11 +120,12 @@ services:
       "gateway",
       "--port", "8001",
       "--keys", "/data/.sovereignstack/keys.json",
-      "--management-url", "http://localhost:8888",
+      "--discovery-url", "http://localhost:8889",
       "--audit-db", "/data/.sovereignstack/sovstack-audit.db",
     ]
-    # Same host-user mapping as management — writes to the bind-mounted
-    # ~/.sovereignstack (audit DB, keys.json read) stay host-owned.
+    # Same host-user mapping as the policy / discovery / metrics-proxy
+    # services — writes to the bind-mounted ~/.sovereignstack (audit DB,
+    # keys.json read) stay host-owned.
     user: "${USER_UID:-1000}:${USER_GID:-1000}"
     network_mode: host
     volumes:
@@ -94,7 +142,10 @@ services:
       retries: 3
       start_period: 10s
     depends_on:
-      management:
+      # Gateway only needs discovery healthy to start (that's where it polls
+      # for the running-models registry). Policy and metrics-proxy are
+      # external-facing and the gateway doesn't talk to them.
+      discovery:
         condition: service_healthy
     restart: unless-stopped
 

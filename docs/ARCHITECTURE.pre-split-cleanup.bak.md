@@ -2,9 +2,7 @@
 
 SovereignStack is one Go binary (`sovstack`) that knows how to run as
 four different services. All four speak HTTP-only — no shared databases,
-no shared filesystems, no shared in-process state. Each service owns one
-concern and runs on its own port; this is the architecture, not a
-deployment option.
+no shared filesystems, no shared in-process state.
 
 ## Topology
 
@@ -88,6 +86,11 @@ Resolves a model name to a container port and proxies the vLLM
 |----------|---------|
 | `GET /api/v1/models/{name}/metrics` | vLLM Prometheus metrics |
 | `GET /healthz`, `/readyz` | Liveness, readiness |
+
+### Legacy management (`sovstack management`)
+
+Mounts all three subservices on port 8888 — the pre-split form, kept as
+a backward-compat shim. Prints a deprecation warning on startup.
 
 ## Data
 
@@ -183,3 +186,4 @@ they're separate but adjacent.
 - [Phase A — Foundations](PHASE_A_FOUNDATIONS.md) for config, logging, versioning
 - [Phase C — Security at rest](PHASE_C_SECURITY.md) for the threat model
 - [Phase D — Trust boundary](PHASE_D_TRUST_BOUNDARY.md) for the OSS / commercial split
+- [Phase E — Management split](PHASE_E_MANAGEMENT_SPLIT.md) for the three-service rationale

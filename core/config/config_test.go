@@ -17,8 +17,8 @@ func TestDefaults(t *testing.T) {
 	if cfg.Gateway.Port != 8001 {
 		t.Errorf("expected gateway port 8001, got %d", cfg.Gateway.Port)
 	}
-	if cfg.Management.Port != 8888 {
-		t.Errorf("expected management port 8888, got %d", cfg.Management.Port)
+	if cfg.Policy.Port != 8888 {
+		t.Errorf("expected management port 8888, got %d", cfg.Policy.Port)
 	}
 	if cfg.Visibility.Port != 9000 {
 		t.Errorf("expected visibility port 9000, got %d", cfg.Visibility.Port)
@@ -99,7 +99,7 @@ log:
   level: info
 gateway:
   port: 8001
-management:
+policy:
   admin_key: from_yaml
 `
 	path := filepath.Join(t.TempDir(), "cfg.yaml")
@@ -122,8 +122,8 @@ management:
 	if cfg.Gateway.Port != 7777 {
 		t.Errorf("gateway.port: env override failed, got %d", cfg.Gateway.Port)
 	}
-	if cfg.Management.AdminKey != "from_env" {
-		t.Errorf("admin_key: env override failed, got %s", cfg.Management.AdminKey)
+	if cfg.Policy.AdminKey != "from_env" {
+		t.Errorf("admin_key: env override failed, got %s", cfg.Policy.AdminKey)
 	}
 }
 

@@ -99,7 +99,7 @@ class H(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/api/v1/models/running":
-            body = json.dumps([{"model_name": MODEL, "status": "running"}]).encode()
+            body = json.dumps([{"name": MODEL, "status": "running"}]).encode()
             self._send(200, body)
         elif self.path == f"/api/v1/models/{MODEL}/metrics":
             self._send(200, METRICS, ctype="text/plain; version=0.0.4")
@@ -139,7 +139,7 @@ SOVSTACK_INSECURE_HTTP=true \
 "$TMPDIR/sovstack-smoke" gateway \
     --port "$GW_PORT" \
     --backend "http://127.0.0.1:9999" \
-    --management-url "http://127.0.0.1:$MGMT_PORT" \
+    --discovery-url "http://127.0.0.1:$MGMT_PORT" \
     --rate-limit 0 \
     --admission-poll-seconds 1 \
     >"$TMPDIR/admission-smoke-gateway.log" 2>&1 &

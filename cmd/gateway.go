@@ -51,7 +51,7 @@ func init() {
 	gatewayCmd.Flags().String("audit-db", "./sovstack-audit.db", "Path to SQLite audit database (empty = in-memory only)")
 	gatewayCmd.Flags().String("audit-key", "", "Encryption key for audit logs (reads SOVSTACK_AUDIT_KEY env var if not set)")
 	gatewayCmd.Flags().String("keys", "", "Path to keys.json file (empty = use hardcoded test keys)")
-	gatewayCmd.Flags().String("management-url", "http://localhost:8888", "Management service URL for model discovery (Phase 3)")
+	gatewayCmd.Flags().String("discovery-url", "http://localhost:8889", "Discovery service URL — gateway polls /api/v1/models/running here")
 	// Admission controller (host-aware circuit breaker). All defaults
 	// match core/config; flags override only when the user passes them.
 	gatewayCmd.Flags().Bool("admission-enabled", true, "Enable host-aware admission control (kv-cache + queue-depth backpressure)")
@@ -109,9 +109,9 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed("keys") {
 		keysPath, _ = cmd.Flags().GetString("keys")
 	}
-	managementURL := cfg.Gateway.ManagementURL
-	if cmd.Flags().Changed("management-url") {
-		managementURL, _ = cmd.Flags().GetString("management-url")
+	discoveryURL := cfg.Gateway.DiscoveryURL
+	if cmd.Flags().Changed("discovery-url") {
+		discoveryURL, _ = cmd.Flags().GetString("discovery-url")
 	}
 
 	// Admission overrides — same explicit-flag-only override pattern.
@@ -237,13 +237,13 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create model router (Phase 3) for multi-model routing
-	modelRouter = gateway.NewModelRouter(managementURL)
+	modelRouter = gateway.NewModelRouter(discoveryURL)
 	modelRouter.StartDiscovery()
 
 	// Build the host-aware admission controller. Defaults derive from
 	// detected hardware; on a host without nvidia-smi the budget falls
 	// back to system RAM and the queue cap stays informational.
-	admissionCtrl := buildAdmissionController(cmd.Context(), admissionCfg, managementURL, log)
+	admissionCtrl := buildAdmissionController(cmd.Context(), admissionCfg, discoveryURL, log)
 
 	gw, err := gateway.NewGateway(gateway.GatewayConfig{
 		TargetURL:        backend,
@@ -276,7 +276,7 @@ func runGateway(cmd *cobra.Command, args []string) error {
 		slog.String("audit_db", auditDB),
 		slog.Bool("using_keystore", usingKeyStore),
 		slog.Int("registered_models", modelRouter.GetModelCount()),
-		slog.String("management_url", managementURL),
+		slog.String("discovery_url", discoveryURL),
 	)
 
 	// Decorative banner — only shown in human/text mode.
@@ -305,7 +305,7 @@ func runGateway(cmd *cobra.Command, args []string) error {
 			fmt.Printf("\n  To use keys.json, run: sovstack gateway --keys ~/.sovereignstack/keys.json\n")
 		}
 
-		fmt.Printf("  Model Router: Enabled (Phase 3, polling %s every 30s)\n", managementURL)
+		fmt.Printf("  Model Router: Enabled (Phase 3, polling %s every 30s)\n", discoveryURL)
 		fmt.Printf("  Registered Models: %d\n", modelRouter.GetModelCount())
 		fmt.Printf("  Metrics: Enabled (Phase 4, Prometheus format)\n")
 
@@ -340,7 +340,7 @@ func runGateway(cmd *cobra.Command, args []string) error {
 
 	// Health probes (Phase A5)
 	healthChecker := health.New()
-	healthChecker.Register("management", health.HTTPCheck(nil, managementURL+"/healthz"))
+	healthChecker.Register("discovery", health.HTTPCheck(nil, discoveryURL+"/healthz"))
 	if usingKeyStore {
 		healthChecker.Register("keystore", func(ctx context.Context) error {
 			if keyStore == nil {
@@ -479,7 +479,7 @@ func (a *gatewayAuthAdapter) RemoveKey(apiKey string) {
 // runs but with a zero queue-depth cap (informational only). vLLM cache
 // pressure remains the primary signal in that case.
 func buildAdmissionController(ctx context.Context, cfg config.AdmissionConfig,
-	managementURL string, log *slog.Logger) *admission.Controller {
+	discoveryURL string, log *slog.Logger) *admission.Controller {
 
 	if !cfg.Enabled {
 		log.Info("admission controller disabled by config")
@@ -502,7 +502,7 @@ func buildAdmissionController(ctx context.Context, cfg config.AdmissionConfig,
 	pollInterval := time.Duration(cfg.PollSeconds) * time.Second
 	calmDuration := time.Duration(cfg.CalmSeconds) * time.Second
 
-	fetcher, lister := admission.NewHTTPClients(managementURL, 3*time.Second)
+	fetcher, lister := admission.NewHTTPClients(discoveryURL, 3*time.Second)
 
 	ctrl := admission.New(admission.Config{
 		Enabled:         cfg.Enabled,
