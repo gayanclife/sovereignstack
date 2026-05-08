@@ -91,22 +91,38 @@ if [ "$FORCE_BUILD" = true ]; then
   docker compose build management 2>&1 | tail -5 | sed 's/^/  /'
 fi
 
-SERVICES=("${CORE_SERVICES[@]}")
-if [ "$WITH_MONITORING" = true ]; then
-  SERVICES+=("${MONITOR_SERVICES[@]}")
+# Run containers as the host user so files written into the bind-mounted
+# ~/.sovereignstack (keys.json, audit DB) end up host-owned, not root.
+# Management still needs read access to /var/run/docker.sock; pass through
+# the host's docker group GID so it can talk to the daemon as a non-root
+# user. Falls back gracefully if docker group doesn't exist on this host.
+export USER_UID="$(id -u)"
+export USER_GID="$(id -g)"
+DOCKER_GID="$(getent group docker 2>/dev/null | cut -d: -f3)"
+export DOCKER_GID="${DOCKER_GID:-${USER_GID}}"
+
+# Detect a stale root-owned keystore from a prior compose run that
+# predated this fix; the host can't read it, and seeding will fail
+# inside the now-non-root container too. Surface a clean recovery.
+KEYS_FILE="$HOME/.sovereignstack/keys.json"
+if [ -f "$KEYS_FILE" ] && [ ! -r "$KEYS_FILE" ]; then
+  warn "$KEYS_FILE is not readable by you (likely root-owned from a prior compose run)"
+  echo "  Recover with:"
+  echo "    sudo chown -R \"$USER_UID:$USER_GID\" \"$HOME/.sovereignstack\""
+  echo "  Then re-run this script."
+  die "stale keystore ownership — recover and retry"
 fi
 
-log "starting ${SERVICES[*]}"
-docker compose up -d "${SERVICES[@]}" 2>&1 | tail -10 | sed 's/^/  /'
+# Step 1 — bring up management ALONE so we can seed the demo user before
+# the gateway starts. The gateway loads keys.json once at startup; if we
+# seed after, it never sees the new user.
+log "starting management (alone — gateway joins after demo seed)"
+docker compose up -d management 2>&1 | tail -5 | sed 's/^/  /'
 
-# Wait for healthchecks. docker compose ps reports "healthy" once the
-# container's HEALTHCHECK passes (5s start_period for management, 10s for
-# gateway). We poll the docker daemon directly, not the HTTP endpoint —
-# host networking on the gateway means it's bound to 0.0.0.0:8001 either
-# way, but management's port mapping makes localhost:8888 the right probe.
-log "waiting for services to be healthy"
-for svc in "${CORE_SERVICES[@]}"; do
-  for _ in $(seq 1 30); do
+wait_healthy() {
+  local svc="$1" tries=30
+  local state=""
+  while [ "$tries" -gt 0 ]; do
     state="$(docker compose ps --format json "$svc" 2>/dev/null \
              | python3 -c 'import sys,json
 try:
@@ -116,22 +132,22 @@ except Exception:
     print("unknown")' 2>/dev/null)"
     if [ "$state" = "healthy" ]; then
       ok "$svc healthy"
-      break
+      return 0
     fi
+    tries=$((tries-1))
     sleep 1
   done
-  if [ "$state" != "healthy" ]; then
-    warn "$svc not healthy after 30s — continuing; check 'docker compose logs $svc'"
-  fi
-done
+  warn "$svc not healthy after 30s — continuing; check 'docker compose logs $svc'"
+  return 1
+}
+wait_healthy management
 
-# ─── Seed the demo user ───────────────────────────────────────────────────────
+# Step 2 — seed the demo user (so the gateway sees it on first load).
 DEMO_KEY=""
 if [ "$SKIP_SEED" = true ]; then
   log "skipping demo user seed (--no-seed)"
 else
   log "seeding demo user '$DEMO_USER' inside the management container"
-  # Best-effort cleanup of a previous demo user.
   docker compose exec -T management /app/sovstack keys remove "$DEMO_USER" >/dev/null 2>&1 || true
   ADD_OUT="$(docker compose exec -T management /app/sovstack keys add "$DEMO_USER" \
                 --department demo --team demo --role analyst 2>&1 || true)"
@@ -147,6 +163,16 @@ else
     || warn "set-quota failed"
   ok "demo user ready"
 fi
+
+# Step 3 — bring up the gateway (now keys.json contains the demo user)
+# and any monitoring services the user asked for.
+SERVICES=("gateway")
+if [ "$WITH_MONITORING" = true ]; then
+  SERVICES+=("${MONITOR_SERVICES[@]}")
+fi
+log "starting ${SERVICES[*]}"
+docker compose up -d "${SERVICES[@]}" 2>&1 | tail -5 | sed 's/^/  /'
+wait_healthy gateway
 
 # ─── Banner ───────────────────────────────────────────────────────────────────
 cat <<EOF

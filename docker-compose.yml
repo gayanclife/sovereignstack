@@ -24,7 +24,17 @@ services:
       dockerfile: Dockerfile.management
     image: sovereignstack:latest
     container_name: sovereignstack-management
-    command: ["management", "--port", "8888", "--keys", "/root/.sovereignstack/keys.json"]
+    command: ["management", "--port", "8888", "--keys", "/data/.sovereignstack/keys.json"]
+    # Run as the host user so writes to the bind-mounted ~/.sovereignstack
+    # (keys.json, audit DB) end up host-owned, not root-owned. Set by
+    # scripts/start-stack-docker.sh; falls back to 1000:1000 if invoked via
+    # `docker compose up` directly.
+    user: "${USER_UID:-1000}:${USER_GID:-1000}"
+    # /var/run/docker.sock on most distros is owned by root:docker (660),
+    # so we add the host's docker group GID so management can talk to the
+    # daemon as a non-root user.
+    group_add:
+      - "${DOCKER_GID:-999}"
     ports:
       - "${MANAGEMENT_PORT:-8888}:8888"
     volumes:
@@ -32,11 +42,12 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       # Keystore is the single source of truth for users; management WRITES it
       # when admin endpoints mutate user/quota/access.
-      - ~/.sovereignstack:/root/.sovereignstack
+      - ~/.sovereignstack:/data/.sovereignstack
     environment:
-      - SOVEREIGNSTACK_LOG_DIR=/root/.sovereignstack/logs
+      - SOVEREIGNSTACK_LOG_DIR=/data/.sovereignstack/logs
       - SOVSTACK_ADMIN_KEY=${SOVSTACK_ADMIN_KEY:-}
       - SOVSTACK_INSECURE_HTTP=true   # compose mode is dev-friendly; flip for prod
+      - HOME=/data  # /data/.sovereignstack is the bind mount; HOME points there for any tool that consults it
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8888/healthz"]
       interval: 30s
@@ -60,17 +71,21 @@ services:
     command: [
       "gateway",
       "--port", "8001",
-      "--keys", "/root/.sovereignstack/keys.json",
+      "--keys", "/data/.sovereignstack/keys.json",
       "--management-url", "http://localhost:8888",
-      "--audit-db", "/root/.sovereignstack/sovstack-audit.db",
+      "--audit-db", "/data/.sovereignstack/sovstack-audit.db",
     ]
+    # Same host-user mapping as management — writes to the bind-mounted
+    # ~/.sovereignstack (audit DB, keys.json read) stay host-owned.
+    user: "${USER_UID:-1000}:${USER_GID:-1000}"
     network_mode: host
     volumes:
-      - ~/.sovereignstack:/root/.sovereignstack
+      - ~/.sovereignstack:/data/.sovereignstack
     environment:
-      - SOVEREIGNSTACK_LOG_DIR=/root/.sovereignstack/logs
+      - SOVEREIGNSTACK_LOG_DIR=/data/.sovereignstack/logs
       - SOVSTACK_INSECURE_HTTP=true
       - SOVSTACK_AUDIT_KEY=${SOVSTACK_AUDIT_KEY:-}
+      - HOME=/data
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8001/healthz"]
       interval: 30s
