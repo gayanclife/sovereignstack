@@ -28,6 +28,7 @@ type GatewayMetrics struct {
 	accessDeniedTotal        int64 // Access denials
 	rateLimitHitsTotal       int64 // Rate limit rejections
 	tokenQuotaExceededTotal  int64 // Token quota rejections
+	admissionShedTotal       int64 // Host-aware admission rejections
 	tokensInputTotal         int64 // Total input tokens
 	tokensOutputTotal        int64 // Total output tokens
 	activeRequests           int64 // Currently processing requests
@@ -41,6 +42,7 @@ type GatewayMetrics struct {
 	latencyByModel      map[string][]int64    // "model" → latencies in ms
 	accessDeniedByUser  map[string]int64      // "user" → count
 	authFailuresByReason map[string]int64     // "reason" → count
+	admissionShedByModel map[string]int64     // "model" → count
 }
 
 // NewGatewayMetrics creates a new metrics tracker
@@ -53,6 +55,7 @@ func NewGatewayMetrics() *GatewayMetrics {
 		latencyByModel:       make(map[string][]int64),
 		accessDeniedByUser:   make(map[string]int64),
 		authFailuresByReason: make(map[string]int64),
+		admissionShedByModel: make(map[string]int64),
 	}
 }
 
@@ -148,6 +151,19 @@ func (m *GatewayMetrics) RecordTokenQuotaExceeded() {
 	atomic.AddInt64(&m.tokenQuotaExceededTotal, 1)
 }
 
+// RecordAdmissionShed records a host-aware admission rejection. modelName
+// may be empty when the request came in without a recognizable model
+// (e.g. a probe at /v1/models with no name in the URL).
+func (m *GatewayMetrics) RecordAdmissionShed(modelName string) {
+	atomic.AddInt64(&m.admissionShedTotal, 1)
+	if modelName == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.admissionShedByModel[modelName]++
+}
+
 // WritePrometheusText writes metrics in Prometheus text format
 func (m *GatewayMetrics) WritePrometheusText() string {
 	var output strings.Builder
@@ -227,6 +243,27 @@ func (m *GatewayMetrics) WritePrometheusText() string {
 	output.WriteString(fmt.Sprintf("gateway_token_quota_exceeded_total %d\n", atomic.LoadInt64(&m.tokenQuotaExceededTotal)))
 	output.WriteString("\n")
 
+	// Admission rejections (host-aware circuit breaker).
+	output.WriteString("# HELP gateway_admission_shed_total Total host-aware admission rejections\n")
+	output.WriteString("# TYPE gateway_admission_shed_total counter\n")
+	output.WriteString(fmt.Sprintf("gateway_admission_shed_total %d\n", atomic.LoadInt64(&m.admissionShedTotal)))
+	output.WriteString("\n")
+
+	output.WriteString("# HELP gateway_admission_shed_by_model Admission rejections per target model\n")
+	output.WriteString("# TYPE gateway_admission_shed_by_model counter\n")
+	m.mu.RLock()
+	admissionKeys := make([]string, 0, len(m.admissionShedByModel))
+	for k := range m.admissionShedByModel {
+		admissionKeys = append(admissionKeys, k)
+	}
+	sort.Strings(admissionKeys)
+	for _, model := range admissionKeys {
+		output.WriteString(fmt.Sprintf("gateway_admission_shed_by_model{model=\"%s\"} %d\n",
+			model, m.admissionShedByModel[model]))
+	}
+	m.mu.RUnlock()
+	output.WriteString("\n")
+
 	// Per-model latency percentiles
 	output.WriteString("# HELP gateway_request_duration_seconds Request duration percentiles\n")
 	output.WriteString("# TYPE gateway_request_duration_seconds summary\n")
@@ -267,6 +304,7 @@ func (m *GatewayMetrics) GetMetricsSnapshot() map[string]interface{} {
 		"access_denied_total":      atomic.LoadInt64(&m.accessDeniedTotal),
 		"rate_limit_hits_total":    atomic.LoadInt64(&m.rateLimitHitsTotal),
 		"token_quota_exceeded_total": atomic.LoadInt64(&m.tokenQuotaExceededTotal),
+		"admission_shed_total":     atomic.LoadInt64(&m.admissionShedTotal),
 		"tokens_input_total":       atomic.LoadInt64(&m.tokensInputTotal),
 		"tokens_output_total":      atomic.LoadInt64(&m.tokensOutputTotal),
 		"requests_by_status":       copyStringIntMap(m.requestsByStatus),

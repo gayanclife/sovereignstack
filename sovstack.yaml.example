@@ -31,6 +31,30 @@ gateway:
   audit_db: ./sovstack-audit.db
   # env: SOVSTACK_GATEWAY_PORT, SOVSTACK_GATEWAY_RATE_LIMIT, SOVSTACK_KEYS_FILE, ...
 
+  # ---------------------------------------------------------------------------
+  # Admission control — host-aware adaptive circuit breaker.
+  #
+  # Polls each running model's vLLM /metrics via the management service,
+  # tracks an EMA of GPU kv-cache pressure, and rejects with 503 +
+  # Retry-After when the host approaches saturation. The dynamic hard cap
+  # tightens by `stress_margin` when EMA crosses 0.9 * cap and steps back
+  # up by half on each `calm_seconds` window of EMA below `soft_cache_pct`.
+  #
+  # Per-model queue cap = max_queue_per_gb * (host VRAM in GB / running models).
+  # Disable with `enabled: false` to fully bypass (preserves prior behavior).
+  # ---------------------------------------------------------------------------
+  admission:
+    enabled: true            # master switch
+    hard_cache_pct: 95       # upper bound on dynamic cap (reject above this)
+    soft_cache_pct: 80       # warn-only threshold
+    min_hard_cache_pct: 60   # floor for the dynamic cap under sustained stress
+    stress_margin: 10        # how far the cap drops on a stress event
+    max_queue_per_gb: 4      # queued-request cap per GB of host VRAM
+    poll_seconds: 5          # how often per-model metrics are scraped
+    ema_alpha: 0.2           # smoothing factor in (0,1]; higher = more responsive
+    calm_seconds: 300        # EMA must stay below soft for this long to relax cap
+    # env: SOVSTACK_ADMISSION_ENABLED, SOVSTACK_ADMISSION_HARD_CACHE_PCT, ...
+
 # -----------------------------------------------------------------------------
 # Management — control plane: Docker discovery, user policy, vLLM metrics proxy.
 # -----------------------------------------------------------------------------
