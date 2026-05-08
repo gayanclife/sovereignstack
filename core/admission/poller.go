@@ -98,10 +98,10 @@ func newHTTPModelLister(managementURL string, timeout time.Duration) *httpModelL
 }
 
 // runningModelEntry mirrors the subset of /api/v1/models/running we read.
-// Match ModelName / Status to the discovery service's JSON tags so future
-// fields (port, GPU, etc.) can be added without breaking us.
+// The model name is exposed as "name" (NOT "model_name" — that older tag
+// silently produced empty entries the controller couldn't act on).
 type runningModelEntry struct {
-	ModelName string `json:"model_name"`
+	ModelName string `json:"name"`
 	Status    string `json:"status"`
 }
 

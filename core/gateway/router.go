@@ -41,10 +41,14 @@ type ModelRouter struct {
 	stopOnce        sync.Once
 }
 
-// managementModelsResponse is the JSON response from management service
+// managementModelsResponse is the JSON response from the management service's
+// /api/v1/models/running endpoint. The model name comes back as "name"
+// (NOT "model_name" — that older tag silently produced an empty registry,
+// which made every model-routed request fall through to the default
+// backend with a 404).
 type managementModelsResponse struct {
 	Models []struct {
-		ModelName   string `json:"model_name"`
+		ModelName   string `json:"name"`
 		ContainerID string `json:"container_id"`
 		Type        string `json:"type"`
 		Status      string `json:"status"`

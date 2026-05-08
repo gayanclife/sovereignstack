@@ -1,0 +1,214 @@
+#!/bin/bash
+
+# SovereignStack OSS — full stack as containers (docker compose)
+#
+# Brings up management + gateway in containers via the workspace
+# docker-compose.yml, optionally adds the monitoring stack, seeds a demo
+# user inside the management container so its API key is usable through
+# the gateway, and prints a banner with every endpoint.
+#
+# This is the container-mode counterpart to scripts/start-stack.sh
+# (which runs the same services natively without Docker).
+#
+# Usage:
+#   ./scripts/start-stack-docker.sh                 # management + gateway
+#   ./scripts/start-stack-docker.sh --with-monitoring   # also Prometheus + Grafana
+#   ./scripts/start-stack-docker.sh --no-seed       # don't (re-)create the demo user
+#   ./scripts/start-stack-docker.sh --build         # force docker image rebuild
+#   ./scripts/start-stack-docker.sh --stop          # stop running services (state preserved)
+#   ./scripts/start-stack-docker.sh --down          # stop AND remove containers (full teardown)
+#   ./scripts/start-stack-docker.sh --help
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+CORE_SERVICES=("management" "gateway")
+MONITOR_SERVICES=("prometheus" "grafana" "node-exporter" "cadvisor")
+
+DEMO_USER="${DEMO_USER:-demo}"
+DEMO_MODEL_ALLOW="${DEMO_MODEL_ALLOW:-*}"
+DAILY_QUOTA="${DAILY_QUOTA:-500000}"
+MONTHLY_QUOTA="${MONTHLY_QUOTA:-10000000}"
+
+WITH_MONITORING=false
+SKIP_SEED=false
+FORCE_BUILD=false
+ACTION="up"   # up | stop | down
+
+# ─── Colors / logging ─────────────────────────────────────────────────────────
+BLUE='\033[1;36m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; RED='\033[1;31m'; NC='\033[0m'
+log()  { printf "${BLUE}[docker-stack]${NC} %s\n" "$*"; }
+ok()   { printf "${GREEN}[ ok  ]${NC} %s\n" "$*"; }
+warn() { printf "${YELLOW}[warn]${NC} %s\n" "$*"; }
+die()  { printf "${RED}[fail]${NC} %s\n" "$*"; exit 1; }
+
+show_help() {
+  sed -n '3,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+# ─── Args ─────────────────────────────────────────────────────────────────────
+for arg in "$@"; do
+  case "$arg" in
+    --with-monitoring) WITH_MONITORING=true ;;
+    --no-seed)         SKIP_SEED=true ;;
+    --build)           FORCE_BUILD=true ;;
+    --stop)            ACTION="stop" ;;
+    --down)            ACTION="down" ;;
+    -h|--help)         show_help; exit 0 ;;
+    *)                 echo "unknown arg: $arg"; show_help; exit 1 ;;
+  esac
+done
+
+cd "$PROJECT_ROOT"
+
+# ─── Preflight ────────────────────────────────────────────────────────────────
+command -v docker >/dev/null || die "docker required"
+docker compose version >/dev/null 2>&1 || die "docker compose plugin required (try: docker-compose if older)"
+
+# ─── --stop / --down: tear down without bringing anything up ─────────────────
+if [ "$ACTION" = "stop" ]; then
+  log "stopping core services (state preserved)"
+  docker compose stop "${CORE_SERVICES[@]}" 2>&1 | sed 's/^/  /'
+  if [ "$WITH_MONITORING" = true ]; then
+    docker compose stop "${MONITOR_SERVICES[@]}" 2>&1 | sed 's/^/  /'
+  fi
+  ok "stopped"
+  exit 0
+fi
+
+if [ "$ACTION" = "down" ]; then
+  log "removing containers (state lost — volumes for prom/grafana persist)"
+  docker compose down --remove-orphans 2>&1 | sed 's/^/  /'
+  ok "down"
+  exit 0
+fi
+
+# ─── Bring services up ────────────────────────────────────────────────────────
+if [ "$FORCE_BUILD" = true ]; then
+  log "rebuilding sovereignstack image (--build)"
+  docker compose build management 2>&1 | tail -5 | sed 's/^/  /'
+fi
+
+SERVICES=("${CORE_SERVICES[@]}")
+if [ "$WITH_MONITORING" = true ]; then
+  SERVICES+=("${MONITOR_SERVICES[@]}")
+fi
+
+log "starting ${SERVICES[*]}"
+docker compose up -d "${SERVICES[@]}" 2>&1 | tail -10 | sed 's/^/  /'
+
+# Wait for healthchecks. docker compose ps reports "healthy" once the
+# container's HEALTHCHECK passes (5s start_period for management, 10s for
+# gateway). We poll the docker daemon directly, not the HTTP endpoint —
+# host networking on the gateway means it's bound to 0.0.0.0:8001 either
+# way, but management's port mapping makes localhost:8888 the right probe.
+log "waiting for services to be healthy"
+for svc in "${CORE_SERVICES[@]}"; do
+  for _ in $(seq 1 30); do
+    state="$(docker compose ps --format json "$svc" 2>/dev/null \
+             | python3 -c 'import sys,json
+try:
+    d=json.loads(sys.stdin.read() or "{}")
+    print(d.get("Health","unknown"))
+except Exception:
+    print("unknown")' 2>/dev/null)"
+    if [ "$state" = "healthy" ]; then
+      ok "$svc healthy"
+      break
+    fi
+    sleep 1
+  done
+  if [ "$state" != "healthy" ]; then
+    warn "$svc not healthy after 30s — continuing; check 'docker compose logs $svc'"
+  fi
+done
+
+# ─── Seed the demo user ───────────────────────────────────────────────────────
+DEMO_KEY=""
+if [ "$SKIP_SEED" = true ]; then
+  log "skipping demo user seed (--no-seed)"
+else
+  log "seeding demo user '$DEMO_USER' inside the management container"
+  # Best-effort cleanup of a previous demo user.
+  docker compose exec -T management /app/sovstack keys remove "$DEMO_USER" >/dev/null 2>&1 || true
+  ADD_OUT="$(docker compose exec -T management /app/sovstack keys add "$DEMO_USER" \
+                --department demo --team demo --role analyst 2>&1 || true)"
+  echo "$ADD_OUT" | grep -E '^\s*(API Key|User ID):' || true
+  DEMO_KEY="$(echo "$ADD_OUT" | awk '/API Key:/ {print $3; exit}')"
+  if [ -z "$DEMO_KEY" ]; then
+    warn "could not capture demo key; check 'docker compose logs management'"
+  fi
+  docker compose exec -T management /app/sovstack keys grant-model "$DEMO_USER" "$DEMO_MODEL_ALLOW" >/dev/null 2>&1 \
+    || warn "grant-model failed (model whitelist may be empty)"
+  docker compose exec -T management /app/sovstack keys set-quota "$DEMO_USER" \
+      --daily "$DAILY_QUOTA" --monthly "$MONTHLY_QUOTA" >/dev/null 2>&1 \
+    || warn "set-quota failed"
+  ok "demo user ready"
+fi
+
+# ─── Banner ───────────────────────────────────────────────────────────────────
+cat <<EOF
+
+──────────────────────────────────────────────────────────────────────
+  SovereignStack OSS is running in containers
+──────────────────────────────────────────────────────────────────────
+
+  Gateway              http://localhost:8001
+    /healthz             liveness probe
+    /readyz              readiness probe
+    /metrics             Prometheus exposition
+    /v1/...              OpenAI-compatible proxy
+    /api/v1/audit/logs   recent audit records (admin)
+
+  Management API       http://localhost:8888
+    /healthz             liveness probe
+    /api/v1/models/running          list running model containers
+    /api/v1/models/{name}/metrics   proxied vLLM /metrics
+    /api/v1/users                   list users (admin)
+    /api/v1/access/check            pre-flight access check
+EOF
+
+if [ "$WITH_MONITORING" = true ]; then
+  cat <<EOF
+
+  Monitoring (containers)
+    Prometheus           http://localhost:9090
+    Grafana              http://localhost:3001  (admin / admin)
+    node-exporter        http://localhost:9100/metrics
+    cAdvisor             http://localhost:8080
+EOF
+fi
+
+if [ -n "$DEMO_KEY" ]; then
+  cat <<EOF
+
+  Demo user              $DEMO_USER
+  Demo API key           $DEMO_KEY
+EOF
+fi
+
+cat <<EOF
+
+  Containers             docker compose ps
+  Logs                   docker compose logs -f management gateway
+  Stop (preserve state)  ./scripts/start-stack-docker.sh --stop
+  Tear down completely   ./scripts/start-stack-docker.sh --down
+
+  Try it:
+    # Routing path: /models/<name>/v1/...  (NOT /v1/models/<name>/...)
+EOF
+
+if [ -n "$DEMO_KEY" ]; then
+cat <<EOF
+    curl -H "X-API-Key: $DEMO_KEY" \\
+         -H "Content-Type: application/json" \\
+         -d '{"messages":[{"role":"user","content":"hi"}]}' \\
+         http://localhost:8001/models/<deployed-model-name>/v1/chat/completions
+EOF
+fi
+
+cat <<EOF
+──────────────────────────────────────────────────────────────────────
+EOF

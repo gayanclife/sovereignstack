@@ -107,7 +107,7 @@ func TestModelRouter_Refresh_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		response := managementModelsResponse{
 			Models: []struct {
-				ModelName   string `json:"model_name"`
+				ModelName   string `json:"name"`
 				ContainerID string `json:"container_id"`
 				Type        string `json:"type"`
 				Status      string `json:"status"`
@@ -157,7 +157,7 @@ func TestModelRouter_Refresh_IgnoresStopped(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		response := managementModelsResponse{
 			Models: []struct {
-				ModelName   string `json:"model_name"`
+				ModelName   string `json:"name"`
 				ContainerID string `json:"container_id"`
 				Type        string `json:"type"`
 				Status      string `json:"status"`
@@ -195,6 +195,59 @@ func TestModelRouter_Refresh_IgnoresStopped(t *testing.T) {
 	_, exists = router.GetBackend("stopped-model")
 	if exists {
 		t.Errorf("stopped-model should not exist")
+	}
+}
+
+// TestModelRouter_Refresh_RealAPIShape pins the parser against the actual
+// JSON shape returned by `sovstack management`'s /api/v1/models/running
+// endpoint. This is the wire format — if a struct rename desyncs the tag
+// from this raw shape, the registry silently empties and every model-
+// routed request 404s through the default backend (root cause of a real
+// production-path regression).
+func TestModelRouter_Refresh_RealAPIShape(t *testing.T) {
+	body := `{
+		"version": "1.0",
+		"models": [
+			{
+				"name": "TinyLlama-Chat-v1.0",
+				"container_id": "abc123",
+				"type": "cpu",
+				"status": "running",
+				"port": 8000
+			},
+			{
+				"name": "distilbert-base-uncased",
+				"container_id": "def456",
+				"type": "cpu",
+				"status": "running",
+				"port": 8002
+			}
+		],
+		"count": 2
+	}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	router := NewModelRouter(server.URL)
+	if err := router.refresh(); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if router.GetModelCount() != 2 {
+		t.Fatalf("expected 2 models from real API shape, got %d (router silently dropped them — JSON tag mismatch?)",
+			router.GetModelCount())
+	}
+	for _, want := range []string{"TinyLlama-Chat-v1.0", "distilbert-base-uncased"} {
+		b, ok := router.GetBackend(want)
+		if !ok {
+			t.Errorf("model %q missing from registry", want)
+			continue
+		}
+		if b.Port == 0 {
+			t.Errorf("model %q has zero port — router didn't read it", want)
+		}
 	}
 }
 
