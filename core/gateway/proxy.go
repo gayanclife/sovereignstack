@@ -253,6 +253,37 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Capability check — short-circuit with a clear error when the caller
+	// hits an endpoint the model can't serve (e.g. /v1/chat/completions on
+	// an encoder model). Without this, the request would forward and get
+	// a misleading bare {"detail":"Not Found"} from the model's FastAPI.
+	// Best-effort: fires only when the router has populated capability info
+	// AND the request matches the routed-by-model URL shape; otherwise
+	// passes through and preserves prior behavior.
+	if gw.modelRouter != nil {
+		routedName := extractModelNameFromPath(r.URL.Path)
+		if routedName != "" {
+			if backend, exists := gw.modelRouter.GetBackend(routedName); exists {
+				stripped := stripModelPrefixFromPath(r.URL.Path, routedName)
+				if !backend.IsPathSupported(stripped) {
+					reason := fmt.Sprintf(
+						"model %q (capability %q) does not serve %s; supported endpoints: %s",
+						routedName, backend.Capability, stripped,
+						strings.Join(backend.Endpoints, ", "))
+					gw.auditLogger.LogError(userID, r.RequestURI, correlationID,
+						reason, http.StatusNotFound, clientIP)
+					w.Header().Set("X-Supported-Endpoints", strings.Join(backend.Endpoints, ","))
+					http.Error(w,
+						fmt.Sprintf(`{"error":"endpoint_not_supported_for_model","model":%q,"capability":%q,"requested":%q,"supported":%s}`,
+							routedName, backend.Capability, stripped,
+							jsonStringArray(backend.Endpoints)),
+						http.StatusNotFound)
+					return
+				}
+			}
+		}
+	}
+
 	// Log incoming request
 	var requestBody []byte
 	if r.Body != nil {
@@ -444,4 +475,30 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// jsonStringArray emits a small JSON array literal from a Go []string.
+// We only use it for the supported-endpoints list in the
+// endpoint_not_supported_for_model error body, so the standard library
+// (encoding/json + bytes.Buffer round-trip) would be overkill.
+func jsonStringArray(items []string) string {
+	if len(items) == 0 {
+		return "[]"
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, s := range items {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('"')
+		// Escape the two characters that can appear in HTTP path strings
+		// and would break the JSON literal.
+		s = strings.ReplaceAll(s, `\`, `\\`)
+		s = strings.ReplaceAll(s, `"`, `\"`)
+		b.WriteString(s)
+		b.WriteByte('"')
+	}
+	b.WriteByte(']')
+	return b.String()
 }

@@ -168,9 +168,9 @@ func TestHTTPModelLister_Success(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`[
-			{"model_name":"a","status":"running"},
-			{"model_name":"b","status":"running"},
-			{"model_name":"c","status":"stopped"}
+			{"name":"a","status":"running"},
+			{"name":"b","status":"running"},
+			{"name":"c","status":"stopped"}
 		]`))
 	}))
 	defer srv.Close()
@@ -187,7 +187,7 @@ func TestHTTPModelLister_Success(t *testing.T) {
 
 func TestHTTPModelLister_ObjectWrappedSchema(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"models":[{"model_name":"x","status":"running"}]}`))
+		_, _ = w.Write([]byte(`{"models":[{"name":"x","status":"running"}]}`))
 	}))
 	defer srv.Close()
 

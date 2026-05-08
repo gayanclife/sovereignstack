@@ -40,6 +40,7 @@ KEYS_FILE="$HOME/.sovereignstack/keys.json"
 WITH_MONITORING=false
 SKIP_BUILD=false
 SKIP_SEED=false
+STOP_ONLY=false
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 BLUE='\033[1;36m'
@@ -68,6 +69,8 @@ Options:
                       -node-exporter, -cadvisor)
   --skip-build        Reuse the existing ./bin/sovstack instead of rebuilding
   --no-seed           Don't create / refresh the demo user
+  --stop              Stop services started by a previous run of this script
+                      and exit (reads .stack-pids; never starts anything)
   -h, --help          Show this help
 
 Env overrides (defaults shown):
@@ -88,10 +91,46 @@ for arg in "$@"; do
     --with-monitoring) WITH_MONITORING=true ;;
     --skip-build)      SKIP_BUILD=true ;;
     --no-seed)         SKIP_SEED=true ;;
+    --stop)            STOP_ONLY=true ;;
     -h|--help)         show_help; exit 0 ;;
     *)                 echo "unknown arg: $arg"; show_help; exit 1 ;;
   esac
 done
+
+# ─── --stop: terminate previously-started services and exit ───────────────────
+# We read .stack-pids written by a prior run of this script. SIGTERM first
+# (graceful), then SIGKILL after a short window for stragglers. This is the
+# explicit counterpart to the cleanup trap that fires when the script is
+# run in the foreground and you Ctrl+C it.
+if [ "$STOP_ONLY" = true ]; then
+  if [ ! -f "$PIDS_FILE" ]; then
+    echo "[stack] no $PIDS_FILE — nothing to stop"
+    exit 0
+  fi
+  STOPPED=0
+  while read -r pid name; do
+    [ -z "${pid:-}" ] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid" 2>/dev/null && \
+        printf "\033[1;36m[stack]\033[0m sent SIGTERM to %s (pid %s)\n" "$name" "$pid"
+      STOPPED=$((STOPPED+1))
+    else
+      printf "\033[1;33m[stack]\033[0m %s (pid %s) was not running\n" "$name" "$pid"
+    fi
+  done < "$PIDS_FILE"
+  # Give graceful shutdown a moment, then escalate.
+  sleep 2
+  while read -r pid name; do
+    [ -z "${pid:-}" ] && continue
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null && \
+        printf "\033[1;33m[stack]\033[0m escalated to SIGKILL on %s (pid %s)\n" "$name" "$pid"
+    fi
+  done < "$PIDS_FILE"
+  rm -f "$PIDS_FILE"
+  printf "\033[1;32m[stack]\033[0m stopped %d service(s)\n" "$STOPPED"
+  exit 0
+fi
 
 # ─── Cleanup trap ─────────────────────────────────────────────────────────────
 # Two-tier teardown: kill recorded PIDs first (clean), then escalate to a
@@ -286,11 +325,16 @@ cat <<EOF
     # Read the audit summary
     curl -s http://localhost:$GW_PORT/api/v1/audit/stats | jq .
 
-    # Send a request (after deploying a model, e.g. distilbert-base-uncased)
-    $BIN deploy distilbert-base-uncased --type cpu     # in another shell, optional
+    # Send a request — pick the right shape for the model's capability.
+    #   generative / seq2seq → POST /v1/chat/completions
+    #   encoder              → POST /v1/embeddings
+    #   classification       → POST /v1/classify
+    # The gateway routes via /models/<name>/v1/... (NOT /v1/models/<name>/...)
+    $BIN deploy TinyLlama/TinyLlama-1.1B-Chat-v1.0 --type cpu     # in another shell, optional
     curl -H "X-API-Key: $DEMO_KEY" \\
+         -H "Content-Type: application/json" \\
          -d '{"messages":[{"role":"user","content":"hi"}]}' \\
-         http://localhost:$GW_PORT/v1/models/distilbert-base-uncased/chat/completions
+         http://localhost:$GW_PORT/models/TinyLlama-TinyLlama-1.1B-Chat-v1.0/v1/chat/completions
 EOF
 else
 cat <<EOF

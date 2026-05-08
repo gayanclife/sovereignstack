@@ -4,7 +4,8 @@ Helper scripts for managing the SovereignStack main stack.
 
 | Script | What it does | When to use |
 |---|---|---|
-| `start-stack.sh` | Native (no-Docker) full OSS startup: builds, seeds a demo user, runs management + gateway, prints every endpoint and the demo key | Day-to-day local development |
+| `start-stack.sh` | Native (no-Docker) full OSS startup: builds, seeds a demo user, runs management + gateway, prints every endpoint and the demo key. Supports `--stop` to terminate a previous run. | Day-to-day local development with a Go toolchain installed |
+| `start-stack-docker.sh` | Same as above but runs both services in containers via `docker-compose.yml`. Supports `--stop` (preserve state) and `--down` (remove containers). | When you don't want a Go toolchain on the host, or want to mirror a production-like container environment |
 | `start-management.sh` | Container-only quick-start for **just** the management API in Docker | Wiring the visibility backend or other clients to a stable management URL without running the gateway |
 | `admission-smoke.sh` | Deterministic 503 demo for the host-aware admission controller (fake mgmt + curl) | Verifying admission guardrails after changes (no GPU needed) |
 
@@ -33,9 +34,17 @@ This is the OSS-only counterpart to the workspace-root `start-demo.sh` (which ad
 # Keep an existing demo user / API key (don't recreate)
 ./scripts/start-stack.sh --no-seed
 
+# Stop a previous run (reads .stack-pids written at startup)
+./scripts/start-stack.sh --stop
+
 # Show help
 ./scripts/start-stack.sh --help
 ```
+
+The script writes `.stack-pids` when it starts services in the background;
+`--stop` reads that file and sends SIGTERM (escalating to SIGKILL after a
+short window). If you ran it in the foreground, Ctrl+C does the same via
+the cleanup trap.
 
 **Env overrides:** `MANAGEMENT_PORT`, `GATEWAY_PORT`, `DEMO_USER`, `DEMO_MODEL_ALLOW`, `DAILY_QUOTA`, `MONTHLY_QUOTA`, `SOVSTACK_ADMIN_KEY`. Defaults match the demo workflow.
 
@@ -64,9 +73,10 @@ This is the OSS-only counterpart to the workspace-root `start-demo.sh` (which ad
   Admin Bearer           sk_admin_…
 
   Try it:
+    # Routing path: /models/<name>/v1/...  (NOT /v1/models/<name>/...)
     curl -H "X-API-Key: sk_…" \
          -d '{"messages":[{"role":"user","content":"hi"}]}' \
-         http://localhost:8001/v1/models/<model>/chat/completions
+         http://localhost:8001/models/<model>/v1/chat/completions
 
   Press Ctrl+C to stop.
 ```
@@ -75,6 +85,52 @@ The script detects port conflicts on `8001` and `8888` up-front so it
 fails fast with a helpful pointer (e.g. "is a `sovereignstack-*`
 container holding it?") instead of dying inside `bind: address already
 in use`. Logs go to `logs/management.log` and `logs/gateway.log`.
+
+---
+
+### start-stack-docker.sh
+
+**Purpose:** Container-mode counterpart to `start-stack.sh`. Brings up
+management + gateway in containers via `docker-compose.yml`, optionally
+adds Prometheus / Grafana, seeds the demo user inside the management
+container so its API key works through the gateway, and prints the same
+endpoint banner. Useful when you don't want a Go toolchain on the host
+or you want to mirror a production-like container layout.
+
+**Usage:**
+
+```bash
+# Standard: management + gateway in containers
+./scripts/start-stack-docker.sh
+
+# Also bring up Prometheus + Grafana
+./scripts/start-stack-docker.sh --with-monitoring
+
+# Force rebuild of the sovereignstack image
+./scripts/start-stack-docker.sh --build
+
+# Don't (re-)create the demo user
+./scripts/start-stack-docker.sh --no-seed
+
+# Stop services but keep containers (state preserved, fast restart)
+./scripts/start-stack-docker.sh --stop
+
+# Stop AND remove containers (full teardown; volumes for prom/grafana persist)
+./scripts/start-stack-docker.sh --down
+
+# Show help
+./scripts/start-stack-docker.sh --help
+```
+
+The wrapper waits for each container's `HEALTHCHECK` to report `healthy`
+before seeding the demo user (Docker reports per-container health via
+`docker compose ps --format json`, polled until ready or 30s timeout).
+
+**Why two scripts and not one with a flag?** Day-to-day flow is short
+enough that one file per mode is easier to read top-to-bottom than a
+single script with branching for native vs container plumbing. Both
+share the demo-user defaults (`DEMO_USER`, `DAILY_QUOTA`, etc.) and the
+banner shape, so switching between them is muscle-memory.
 
 ---
 
