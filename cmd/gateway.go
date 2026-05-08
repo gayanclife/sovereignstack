@@ -13,13 +13,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gayanclife/sovereignstack/core/admission"
 	"github.com/gayanclife/sovereignstack/core/audit"
+	"github.com/gayanclife/sovereignstack/core/config"
 	"github.com/gayanclife/sovereignstack/core/gateway"
 	"github.com/gayanclife/sovereignstack/core/health"
 	"github.com/gayanclife/sovereignstack/core/keys"
 	"github.com/gayanclife/sovereignstack/core/logging"
 	sovstacktls "github.com/gayanclife/sovereignstack/core/tls"
 	"github.com/gayanclife/sovereignstack/core/tracing"
+	"github.com/gayanclife/sovereignstack/internal/hardware"
 	"github.com/spf13/cobra"
 )
 
@@ -49,6 +52,13 @@ func init() {
 	gatewayCmd.Flags().String("audit-key", "", "Encryption key for audit logs (reads SOVSTACK_AUDIT_KEY env var if not set)")
 	gatewayCmd.Flags().String("keys", "", "Path to keys.json file (empty = use hardcoded test keys)")
 	gatewayCmd.Flags().String("management-url", "http://localhost:8888", "Management service URL for model discovery (Phase 3)")
+	// Admission controller (host-aware circuit breaker). All defaults
+	// match core/config; flags override only when the user passes them.
+	gatewayCmd.Flags().Bool("admission-enabled", true, "Enable host-aware admission control (kv-cache + queue-depth backpressure)")
+	gatewayCmd.Flags().Float64("admission-hard-cache-pct", 95, "Reject when GPU kv-cache use is >= this percent")
+	gatewayCmd.Flags().Float64("admission-soft-cache-pct", 80, "Warn when GPU kv-cache use is >= this percent")
+	gatewayCmd.Flags().Int("admission-max-queue-per-gb", 4, "Max queued requests per GB of host VRAM, fair-shared across models")
+	gatewayCmd.Flags().Int("admission-poll-seconds", 5, "How often the admission controller scrapes per-model metrics")
 	rootCmd.AddCommand(gatewayCmd)
 }
 
@@ -102,6 +112,24 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	managementURL := cfg.Gateway.ManagementURL
 	if cmd.Flags().Changed("management-url") {
 		managementURL, _ = cmd.Flags().GetString("management-url")
+	}
+
+	// Admission overrides — same explicit-flag-only override pattern.
+	admissionCfg := cfg.Gateway.Admission
+	if cmd.Flags().Changed("admission-enabled") {
+		admissionCfg.Enabled, _ = cmd.Flags().GetBool("admission-enabled")
+	}
+	if cmd.Flags().Changed("admission-hard-cache-pct") {
+		admissionCfg.HardCachePct, _ = cmd.Flags().GetFloat64("admission-hard-cache-pct")
+	}
+	if cmd.Flags().Changed("admission-soft-cache-pct") {
+		admissionCfg.SoftCachePct, _ = cmd.Flags().GetFloat64("admission-soft-cache-pct")
+	}
+	if cmd.Flags().Changed("admission-max-queue-per-gb") {
+		admissionCfg.MaxQueuePerGB, _ = cmd.Flags().GetInt("admission-max-queue-per-gb")
+	}
+	if cmd.Flags().Changed("admission-poll-seconds") {
+		admissionCfg.PollSeconds, _ = cmd.Flags().GetInt("admission-poll-seconds")
 	}
 
 	// Resolve encryption key
@@ -212,12 +240,18 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	modelRouter = gateway.NewModelRouter(managementURL)
 	modelRouter.StartDiscovery()
 
+	// Build the host-aware admission controller. Defaults derive from
+	// detected hardware; on a host without nvidia-smi the budget falls
+	// back to system RAM and the queue cap stays informational.
+	admissionCtrl := buildAdmissionController(cmd.Context(), admissionCfg, managementURL, log)
+
 	gw, err := gateway.NewGateway(gateway.GatewayConfig{
 		TargetURL:        backend,
 		AuthProvider:     authProvider,
 		AccessController: accessController,
 		QuotaManager:     quotaManager,
 		ModelRouter:      modelRouter,
+		AdmissionCtrl:    admissionCtrl,
 		AuditLogger:      auditLogger,
 		RequestsPerMin:   rateLimit,
 		APIKeyHeader:     apiKeyHeader,
@@ -329,6 +363,9 @@ func runGateway(cmd *cobra.Command, args []string) error {
 		<-sigChan
 		log.Info("shutting down gracefully")
 		modelRouter.Stop()
+		if admissionCtrl != nil {
+			admissionCtrl.Stop()
+		}
 		server.Close()
 	}()
 
@@ -429,4 +466,62 @@ func (a *gatewayAuthAdapter) AddKey(apiKey, userID string) {
 
 func (a *gatewayAuthAdapter) RemoveKey(apiKey string) {
 	// Not used when loading from KeyStore
+}
+
+// buildAdmissionController wires together the host-aware circuit breaker:
+// it derives the host budget from the local hardware, builds HTTP clients
+// against the management metrics-proxy, constructs the controller, and
+// kicks off the polling goroutine. Returns nil when admission is disabled
+// in config — the gateway treats nil as "admit all", matching prior
+// behavior.
+//
+// Failures during budget detection are non-fatal: the controller still
+// runs but with a zero queue-depth cap (informational only). vLLM cache
+// pressure remains the primary signal in that case.
+func buildAdmissionController(ctx context.Context, cfg config.AdmissionConfig,
+	managementURL string, log *slog.Logger) *admission.Controller {
+
+	if !cfg.Enabled {
+		log.Info("admission controller disabled by config")
+		return nil
+	}
+
+	hw, err := hardware.GetSystemHardware()
+	budget := admission.HostBudget{}
+	if err == nil && hw != nil {
+		budget = admission.HostBudget{
+			TotalVRAMBytes: hw.TotalVRAM,
+			TotalRAMBytes:  hw.SystemRAM,
+			CPUCores:       hw.CPUCores,
+		}
+	} else {
+		log.Warn("admission: hardware probe failed; queue-depth cap will be inactive",
+			"error", err)
+	}
+
+	pollInterval := time.Duration(cfg.PollSeconds) * time.Second
+	calmDuration := time.Duration(cfg.CalmSeconds) * time.Second
+
+	fetcher, lister := admission.NewHTTPClients(managementURL, 3*time.Second)
+
+	ctrl := admission.New(admission.Config{
+		Enabled:         cfg.Enabled,
+		HardCachePct:    cfg.HardCachePct,
+		SoftCachePct:    cfg.SoftCachePct,
+		MinHardCachePct: cfg.MinHardCachePct,
+		StressMargin:    cfg.StressMargin,
+		MaxQueuePerGB:   cfg.MaxQueuePerGB,
+		PollInterval:    pollInterval,
+		EMAAlpha:        cfg.EMAAlpha,
+		CalmDuration:    calmDuration,
+	}, budget, log, fetcher, lister, nil)
+
+	ctrl.Start(ctx)
+	log.Info("admission controller started",
+		"hard_cache_pct", cfg.HardCachePct,
+		"soft_cache_pct", cfg.SoftCachePct,
+		"max_queue_per_gb", cfg.MaxQueuePerGB,
+		"poll_interval", pollInterval,
+		"host_vram_gb", float64(budget.TotalVRAMBytes)/(1<<30))
+	return ctrl
 }

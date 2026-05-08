@@ -148,6 +148,42 @@ ss-mgmt --build --logs # Rebuild and watch logs
 ss-mgmt --status       # Check status
 ```
 
+---
+
+### admission-smoke.sh
+
+**Purpose:** End-to-end smoke test for the host-aware admission controller. Spins up a fake management server pinning kv-cache usage at 99%, starts the gateway pointed at it, sends a chat-completion request, and verifies the controller rejects with `503 Service Unavailable` + `Retry-After`. No GPU or real model required.
+
+**Usage:**
+
+```bash
+# Run the full check (~10 seconds)
+./scripts/admission-smoke.sh
+
+# Leave processes running after the test for manual inspection
+./scripts/admission-smoke.sh --keep
+```
+
+**What it verifies:**
+- Gateway boots with admission controller wired in
+- Controller polls the management metrics-proxy and ingests samples
+- A request to a "saturated" model returns HTTP 503
+- Response carries a `Retry-After` header
+- Response body carries the admission reason (e.g. `"kv-cache 99.0% >= hard cap 65.0%"`)
+- `gateway_admission_shed_total` counter increments on `/metrics`
+- `gateway_admission_shed_by_model{model="..."}` per-model breakdown appears
+
+**Exit codes:**
+- `0` — all checks passed
+- `1` — preflight (build / missing tool) failed
+- `2` — fake management did not come up
+- `3` — gateway did not come up
+- `4` — request was admitted instead of rejected
+- `5` — `Retry-After` header missing
+- `6` — metrics counter not incremented
+
+**Requires:** `python3`, `go`, `curl`. Uses ports `18001` (gateway) and `18888` (fake management) so it doesn't collide with `start-demo.sh` or a running stack.
+
 ## Quick Start
 
 ### 1. First Time Setup
