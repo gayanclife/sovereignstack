@@ -198,6 +198,121 @@ func TestModelRouter_Refresh_IgnoresStopped(t *testing.T) {
 	}
 }
 
+// TestModelBackend_IsPathSupported covers the friendly-error gate. The
+// router populates Capability and Endpoints by scraping each model's
+// /v1/models; the proxy uses IsPathSupported to short-circuit requests
+// to endpoints the model can't serve.
+func TestModelBackend_IsPathSupported(t *testing.T) {
+	tests := []struct {
+		name       string
+		backend    ModelBackend
+		path       string
+		wantOK     bool
+	}{
+		{
+			name:    "unknown capability — fail open (legacy model server)",
+			backend: ModelBackend{Name: "legacy"},
+			path:    "/v1/anything",
+			wantOK:  true,
+		},
+		{
+			name: "encoder, request to /v1/embeddings — supported",
+			backend: ModelBackend{
+				Name:       "distilbert",
+				Capability: "encoder",
+				Endpoints:  []string{"/v1/embeddings"},
+			},
+			path:   "/v1/embeddings",
+			wantOK: true,
+		},
+		{
+			name: "encoder, request to /v1/chat/completions — NOT supported",
+			backend: ModelBackend{
+				Name:       "distilbert",
+				Capability: "encoder",
+				Endpoints:  []string{"/v1/embeddings"},
+			},
+			path:   "/v1/chat/completions",
+			wantOK: false,
+		},
+		{
+			name: "generative serves multiple endpoints",
+			backend: ModelBackend{
+				Name:       "tinyllama",
+				Capability: "generative",
+				Endpoints:  []string{"/v1/chat/completions", "/v1/completions"},
+			},
+			path:   "/v1/completions",
+			wantOK: true,
+		},
+		{
+			name: "case-sensitive — /v1/Chat/Completions is NOT a match",
+			backend: ModelBackend{
+				Name:       "tinyllama",
+				Capability: "generative",
+				Endpoints:  []string{"/v1/chat/completions"},
+			},
+			path:   "/v1/Chat/Completions",
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.backend.IsPathSupported(tc.path); got != tc.wantOK {
+				t.Errorf("IsPathSupported(%q) = %v, want %v", tc.path, got, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestModelRouter_FetchCapability_Enriches simulates a model server that
+// exposes /v1/models with capability + endpoints, and confirms the router
+// stores that on the backend. Best-effort behavior: a server that returns
+// 404 / malformed body must leave Capability/Endpoints empty.
+func TestModelRouter_FetchCapability_Enriches(t *testing.T) {
+	// 1) Server that advertises capability — should be populated.
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"distilbert","capability":"encoder","endpoints":["/v1/embeddings"]}]}`))
+	}))
+	defer good.Close()
+
+	r := NewModelRouter("ignored")
+	b := &ModelBackend{Name: "distilbert", URL: good.URL}
+	r.fetchCapability(b)
+	if b.Capability != "encoder" {
+		t.Errorf("Capability: got %q, want encoder", b.Capability)
+	}
+	if len(b.Endpoints) != 1 || b.Endpoints[0] != "/v1/embeddings" {
+		t.Errorf("Endpoints: got %v, want [/v1/embeddings]", b.Endpoints)
+	}
+
+	// 2) Server that doesn't have /v1/models — should leave fields empty.
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.NotFound(w, nil)
+	}))
+	defer bad.Close()
+
+	b2 := &ModelBackend{Name: "legacy", URL: bad.URL}
+	r.fetchCapability(b2)
+	if b2.Capability != "" || b2.Endpoints != nil {
+		t.Errorf("expected empty capability/endpoints on 404, got %q / %v",
+			b2.Capability, b2.Endpoints)
+	}
+
+	// 3) Server with malformed body — same fail-open behavior.
+	garbage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer garbage.Close()
+
+	b3 := &ModelBackend{Name: "garbage", URL: garbage.URL}
+	r.fetchCapability(b3)
+	if b3.Capability != "" || b3.Endpoints != nil {
+		t.Errorf("expected empty capability/endpoints on garbage body, got %q / %v",
+			b3.Capability, b3.Endpoints)
+	}
+}
+
 // TestModelRouter_Refresh_RealAPIShape pins the parser against the actual
 // JSON shape returned by `sovstack management`'s /api/v1/models/running
 // endpoint. This is the wire format — if a struct rename desyncs the tag
