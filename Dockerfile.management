@@ -1,4 +1,6 @@
-# Multi-stage build for SovereignStack Management API
+# Multi-stage build for the SovereignStack `sovstack` binary.
+# The image runs the management API by default but exposes the full CLI;
+# callers can override CMD to run any subcommand (gateway, metrics-proxy, etc.)
 FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
@@ -21,10 +23,12 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build \
 # Runtime image
 FROM alpine:3.19
 
-# Install runtime dependencies
+# Install runtime dependencies. wget is needed by the HEALTHCHECK below;
+# docker-cli is used by the management service to enumerate model containers.
 RUN apk add --no-cache \
     ca-certificates \
-    docker-cli
+    docker-cli \
+    wget
 
 WORKDIR /app
 
@@ -35,7 +39,7 @@ RUN chmod +x /app/sovstack
 EXPOSE 8888
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:8888/api/health || exit 1
+    CMD wget --quiet --tries=1 --spider http://localhost:8888/healthz || exit 1
 
 ENTRYPOINT ["/app/sovstack"]
 CMD ["management", "--port", "8888"]

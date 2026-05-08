@@ -1,7 +1,12 @@
 #!/bin/bash
 
-# SovereignStack Management API - Quick Start Script
-# This script builds and starts the management docker in the main stack
+# SovereignStack Management API — container-only quick-start
+#
+# Brings up just the management API in a Docker container. Useful when you
+# only need the policy / discovery surface (e.g. wiring the visibility
+# backend to it). For the full OSS stack natively (management + gateway,
+# no Docker), use ./scripts/start-stack.sh instead.
+#
 # Usage: ./scripts/start-management.sh [--build] [--logs] [--stop]
 
 set -e
@@ -37,7 +42,11 @@ print_info() {
 
 show_help() {
     cat << EOF
-${BLUE}SovereignStack Management API - Start Script${NC}
+${BLUE}SovereignStack Management API — container-only quick-start${NC}
+
+Brings up just the management API in a Docker container. For the full
+OSS stack (management + gateway) natively without Docker, use
+./scripts/start-stack.sh instead.
 
 Usage: $0 [OPTIONS]
 
@@ -123,17 +132,19 @@ start_container() {
         sleep 2
 
         # Check health
-        if curl -s http://localhost:8888/api/v1/health > /dev/null 2>&1; then
+        if curl -s http://localhost:8888/healthz > /dev/null 2>&1; then
             print_success "Management API is healthy"
             echo ""
             echo -e "${GREEN}🎉 Management API is running!${NC}"
             echo ""
             echo "Endpoints:"
-            echo "  Health:        http://localhost:8888/api/v1/health"
+            echo "  Health:         http://localhost:8888/healthz"
+            echo "  Readiness:      http://localhost:8888/readyz"
             echo "  Running Models: http://localhost:8888/api/v1/models/running"
+            echo "  Users (admin):  http://localhost:8888/api/v1/users"
             echo ""
             echo "Test it:"
-            echo "  curl http://localhost:8888/api/v1/health"
+            echo "  curl http://localhost:8888/healthz"
             echo "  curl http://localhost:8888/api/v1/models/running | jq ."
             echo ""
         else
@@ -166,7 +177,7 @@ show_status() {
     cd "$PROJECT_ROOT"
 
     if docker-compose ps management 2>/dev/null | grep -q management || docker compose ps management | grep -q management; then
-        if curl -s http://localhost:8888/api/v1/health > /dev/null 2>&1; then
+        if curl -s http://localhost:8888/healthz > /dev/null 2>&1; then
             print_success "Management API is running and healthy"
             echo ""
             docker-compose ps management 2>/dev/null || docker compose ps management
@@ -186,7 +197,7 @@ check_health() {
     print_header "Checking Management API Health"
 
     echo "Testing /api/v1/health endpoint..."
-    if response=$(curl -s http://localhost:8888/api/v1/health); then
+    if response=$(curl -s http://localhost:8888/healthz); then
         print_success "API is responding"
         echo "Response: $response"
         echo ""

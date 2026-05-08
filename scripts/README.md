@@ -2,11 +2,85 @@
 
 Helper scripts for managing the SovereignStack main stack.
 
+| Script | What it does | When to use |
+|---|---|---|
+| `start-stack.sh` | Native (no-Docker) full OSS startup: builds, seeds a demo user, runs management + gateway, prints every endpoint and the demo key | Day-to-day local development |
+| `start-management.sh` | Container-only quick-start for **just** the management API in Docker | Wiring the visibility backend or other clients to a stable management URL without running the gateway |
+| `admission-smoke.sh` | Deterministic 503 demo for the host-aware admission controller (fake mgmt + curl) | Verifying admission guardrails after changes (no GPU needed) |
+
+For the **full commercial stack** (OSS + visibility backend + Next.js dashboard) use `../start-demo.sh` at the workspace root.
+
 ## Available Scripts
+
+### start-stack.sh
+
+**Purpose:** Native local startup of the full OSS stack — builds `sovstack`, seeds a demo user with `*` model access and configurable token quota, starts the management API and the gateway in the background, waits for both `/healthz` probes, and prints a banner with every endpoint plus the demo + admin keys. Ctrl+C tears everything down via the cleanup trap.
+
+This is the OSS-only counterpart to the workspace-root `start-demo.sh` (which adds the commercial visibility backend and Next.js dashboard).
+
+**Usage:**
+
+```bash
+# Standard: management + gateway, no monitoring
+./scripts/start-stack.sh
+
+# Also bring up Prometheus + Grafana via docker-compose
+./scripts/start-stack.sh --with-monitoring
+
+# Reuse the existing ./bin/sovstack (skip rebuild)
+./scripts/start-stack.sh --skip-build
+
+# Keep an existing demo user / API key (don't recreate)
+./scripts/start-stack.sh --no-seed
+
+# Show help
+./scripts/start-stack.sh --help
+```
+
+**Env overrides:** `MANAGEMENT_PORT`, `GATEWAY_PORT`, `DEMO_USER`, `DEMO_MODEL_ALLOW`, `DAILY_QUOTA`, `MONTHLY_QUOTA`, `SOVSTACK_ADMIN_KEY`. Defaults match the demo workflow.
+
+**Sample banner:**
+
+```
+──────────────────────────────────────────────────────────────────────
+  SovereignStack OSS is running locally
+──────────────────────────────────────────────────────────────────────
+
+  Gateway              http://localhost:8001
+    /healthz             liveness probe
+    /readyz              readiness probe
+    /metrics             Prometheus exposition
+    /v1/...              OpenAI-compatible proxy
+    /api/v1/audit/logs   recent audit records
+
+  Management API       http://localhost:8888
+    /api/v1/models/running          list running model containers
+    /api/v1/models/{name}/metrics   proxied vLLM /metrics
+    /api/v1/users                   list users (admin)
+    /api/v1/access/check            pre-flight access check
+
+  Demo user              demo
+  Demo API key           sk_…
+  Admin Bearer           sk_admin_…
+
+  Try it:
+    curl -H "X-API-Key: sk_…" \
+         -d '{"messages":[{"role":"user","content":"hi"}]}' \
+         http://localhost:8001/v1/models/<model>/chat/completions
+
+  Press Ctrl+C to stop.
+```
+
+The script detects port conflicts on `8001` and `8888` up-front so it
+fails fast with a helpful pointer (e.g. "is a `sovereignstack-*`
+container holding it?") instead of dying inside `bind: address already
+in use`. Logs go to `logs/management.log` and `logs/gateway.log`.
+
+---
 
 ### start-management.sh
 
-**Purpose:** Build and start the Management API Docker container
+**Purpose:** Container-only quick-start for **just** the management API in Docker. Useful when you want a stable container running the management surface (e.g. for the visibility backend to point at) without bringing up the gateway. For full OSS startup, prefer `start-stack.sh` above.
 
 **Features:**
 - Automatic environment setup (.env creation)
@@ -44,34 +118,20 @@ chmod +x scripts/start-management.sh
 ./scripts/start-management.sh --help
 ```
 
-**Output Example:**
+**Endpoints exposed by the management container:**
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🚀 SovereignStack Management API Startup
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Health:         http://localhost:8888/healthz
+Readiness:      http://localhost:8888/readyz
+Running Models: http://localhost:8888/api/v1/models/running
+Users (admin):  http://localhost:8888/api/v1/users
+```
 
-ℹ Checking environment...
-✓ Created .env file
-✓ Docker is installed
-✓ Docker Compose is available
+**Test it:**
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Starting Management API Container
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-ℹ Waiting for service to be healthy...
-✓ Management API is healthy
-
-🎉 Management API is running!
-
-Endpoints:
-  Health:        http://localhost:8888/api/v1/health
-  Running Models: http://localhost:8888/api/v1/models/running
-
-Test it:
-  curl http://localhost:8888/api/v1/health
-  curl http://localhost:8888/api/v1/models/running | jq .
+```bash
+curl http://localhost:8888/healthz
+curl http://localhost:8888/api/v1/models/running | jq .
 ```
 
 **Aliases (Optional)**
@@ -116,7 +176,7 @@ chmod +x scripts/start-management.sh
 ./scripts/start-management.sh --status
 
 # Option B: Direct commands
-curl http://localhost:8888/api/v1/health
+curl http://localhost:8888/healthz
 curl http://localhost:8888/api/v1/models/running | jq .
 
 # Option C: Docker commands
