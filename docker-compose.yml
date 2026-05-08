@@ -10,7 +10,8 @@
 # Docker daemon directly. The management service discovers them.
 #
 # Native (no-Docker) full-stack alternative: ./scripts/start-stack.sh
-# Container-only management API alternative: ./scripts/start-management.sh
+# Container-mode wrapper (this file + demo-user seeding + banner):
+#   ./scripts/start-stack-docker.sh
 # =============================================================================
 
 services:
