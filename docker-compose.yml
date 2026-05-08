@@ -1,28 +1,93 @@
-version: '3.8'
+# =============================================================================
+# SovereignStack — full OSS stack as containers
+# =============================================================================
+#
+# Brings up: management API (8888), gateway (8001), Prometheus (9090),
+# Grafana (3001), node-exporter (9100), cAdvisor (8080).
+#
+# Model (vLLM / llama.cpp) containers are NOT started here — they are
+# launched on demand by `sovstack deploy <model>`, which talks to the
+# Docker daemon directly. The management service discovers them.
+#
+# Native (no-Docker) full-stack alternative: ./scripts/start-stack.sh
+# Container-only management API alternative: ./scripts/start-management.sh
+# =============================================================================
 
 services:
+  # ---------------------------------------------------------------------------
+  # Management API (8888) — control plane: discovers Docker model containers,
+  # owns user/quota/access policy, proxies vLLM /metrics by name.
+  # ---------------------------------------------------------------------------
   management:
     build:
       context: .
       dockerfile: Dockerfile.management
+    image: sovereignstack:latest
     container_name: sovereignstack-management
+    command: ["management", "--port", "8888", "--keys", "/root/.sovereignstack/keys.json"]
     ports:
       - "${MANAGEMENT_PORT:-8888}:8888"
     volumes:
+      # Docker socket (read-only) — used to enumerate running model containers.
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ~/.sovereignstack:/root/.sovereignstack:ro
+      # Keystore is the single source of truth for users; management WRITES it
+      # when admin endpoints mutate user/quota/access.
+      - ~/.sovereignstack:/root/.sovereignstack
     environment:
       - SOVEREIGNSTACK_LOG_DIR=/root/.sovereignstack/logs
+      - SOVSTACK_ADMIN_KEY=${SOVSTACK_ADMIN_KEY:-}
+      - SOVSTACK_INSECURE_HTTP=true   # compose mode is dev-friendly; flip for prod
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8888/api/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8888/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 5s
     restart: unless-stopped
-  #   depends_on:
-  #     - vllm
 
+  # ---------------------------------------------------------------------------
+  # Gateway (8001) — request hot path. Auth → access → quota → rate-limit →
+  # routing → reverse-proxy to model containers → metrics → audit.
+  #
+  # Uses host networking so the gateway can reach vLLM containers that
+  # `sovstack deploy` published on host ports 8000+ (Linux-only escape hatch).
+  # On Docker Desktop, replace with the bridge network and target
+  # host.docker.internal:8000+ explicitly.
+  # ---------------------------------------------------------------------------
+  gateway:
+    image: sovereignstack:latest
+    container_name: sovereignstack-gateway
+    command: [
+      "gateway",
+      "--port", "8001",
+      "--keys", "/root/.sovereignstack/keys.json",
+      "--management-url", "http://localhost:8888",
+      "--audit-db", "/root/.sovereignstack/sovstack-audit.db",
+    ]
+    network_mode: host
+    volumes:
+      - ~/.sovereignstack:/root/.sovereignstack
+    environment:
+      - SOVEREIGNSTACK_LOG_DIR=/root/.sovereignstack/logs
+      - SOVSTACK_INSECURE_HTTP=true
+      - SOVSTACK_AUDIT_KEY=${SOVSTACK_AUDIT_KEY:-}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8001/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      management:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Optional: a vLLM model container. Disabled by default — `sovstack deploy`
+  # is the recommended path because it picks ports / quantization / GPU
+  # mapping based on the registry. Uncomment and set MODEL_NAME + HF_TOKEN
+  # to launch a single fixed model alongside the rest of the stack.
+  # ---------------------------------------------------------------------------
   # vllm:
   #   image: vllm/vllm-openai:latest
   #   ports:
@@ -42,7 +107,10 @@ services:
   #             capabilities: [gpu]
   #   shm_size: 1g
 
-  # Node-Exporter collects host system metrics (CPU, RAM, disk, network)
+  # ---------------------------------------------------------------------------
+  # Monitoring stack (optional but useful) — host metrics, container metrics,
+  # Prometheus storage, Grafana dashboards.
+  # ---------------------------------------------------------------------------
   node-exporter:
     image: prom/node-exporter:latest
     container_name: sovereignstack-node-exporter
@@ -59,7 +127,6 @@ services:
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
     restart: unless-stopped
 
-  # cAdvisor collects Docker container metrics
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:latest
     container_name: sovereignstack-cadvisor
@@ -76,7 +143,6 @@ services:
       - '--housekeeping_interval=10s'
     restart: unless-stopped
 
-  # Prometheus time-series database for metrics storage
   prometheus:
     image: prom/prometheus:latest
     container_name: sovereignstack-prometheus
@@ -91,7 +157,6 @@ services:
       - '--storage.tsdb.retention.time=30d'
     restart: unless-stopped
 
-  # Grafana dashboarding and visualization
   grafana:
     image: grafana/grafana:latest
     container_name: sovereignstack-grafana
