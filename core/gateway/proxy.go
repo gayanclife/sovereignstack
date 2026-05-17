@@ -485,12 +485,16 @@ func extractModelName(r *http.Request) string {
 
 // serveModelList writes an OpenAI-compatible GET /v1/models response containing
 // all currently deployed models the authenticated user is allowed to access.
+// Capability and supported endpoints are included as extensions so clients like
+// OpenCode can distinguish generative from encoder models.
 func (gw *Gateway) serveModelList(w http.ResponseWriter, userID string) {
 	type modelEntry struct {
-		ID      string `json:"id"`
-		Object  string `json:"object"`
-		Created int64  `json:"created"`
-		OwnedBy string `json:"owned_by"`
+		ID         string   `json:"id"`
+		Object     string   `json:"object"`
+		Created    int64    `json:"created"`
+		OwnedBy    string   `json:"owned_by"`
+		Capability string   `json:"capability,omitempty"`
+		Endpoints  []string `json:"endpoints,omitempty"`
 	}
 	type modelList struct {
 		Object string       `json:"object"`
@@ -505,10 +509,12 @@ func (gw *Gateway) serveModelList(w http.ResponseWriter, userID string) {
 			continue
 		}
 		data = append(data, modelEntry{
-			ID:      b.Name,
-			Object:  "model",
-			Created: now,
-			OwnedBy: "sovereignstack",
+			ID:         b.Name,
+			Object:     "model",
+			Created:    now,
+			OwnedBy:    "sovereignstack",
+			Capability: b.Capability,
+			Endpoints:  b.Endpoints,
 		})
 	}
 
