@@ -8,6 +8,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/mattn/go-sqlite3 v1.14.44
+	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.19.0
 	github.com/schollz/progressbar/v3 v3.14.4
 	github.com/spf13/cobra v1.10.2
@@ -37,7 +38,6 @@ require (
 	github.com/mitchellh/colorstring v0.0.0-20190213212951-d06e56a500db // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
 	github.com/prometheus/procfs v0.16.1 // indirect
