@@ -34,6 +34,19 @@ scrape_configs:
         target_label: instance
         replacement: 'docker-metrics'
 
+  # Model-container metrics via gateway HTTP SD.
+  # The gateway exposes GET /api/v1/prometheus/targets which returns the list
+  # of currently running model backends (port per model). Prometheus refreshes
+  # this list every 30s so new models are scraped automatically without
+  # reloading prometheus.yml. Each target gets a "model" label for easy
+  # filtering in Grafana.
+  - job_name: 'model-metrics'
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+    http_sd_configs:
+      - url: 'http://host.docker.internal:8001/api/v1/prometheus/targets'
+        refresh_interval: 30s
+
   # Prometheus self-monitoring
   - job_name: 'prometheus'
     static_configs:

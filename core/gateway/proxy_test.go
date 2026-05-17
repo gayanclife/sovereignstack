@@ -373,3 +373,87 @@ func TestGateway_ServeModelList(t *testing.T) {
 		t.Errorf("response missing object:list: %s", body)
 	}
 }
+
+// TestGateway_ServePrometheusTargets verifies that /api/v1/prometheus/targets
+// returns a valid Prometheus HTTP SD payload for running backends that have a
+// known port, and omits backends with Port==0 (port unknown).
+func TestGateway_ServePrometheusTargets(t *testing.T) {
+	router := NewModelRouter("http://localhost:9999")
+	router.mu.Lock()
+	router.registry["mistral-7b"] = &ModelBackend{Name: "mistral-7b", URL: "http://localhost:8000", Port: 8000, Status: "running"}
+	router.registry["no-port"]    = &ModelBackend{Name: "no-port",    URL: "http://localhost:0",    Port: 0,    Status: "running"}
+	router.mu.Unlock()
+
+	gw, _ := NewGateway(GatewayConfig{
+		TargetURL:   "http://localhost:8000",
+		ModelRouter: router,
+		AuditLogger: audit.NewLogger(10),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/prometheus/targets", nil)
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "localhost:8000") {
+		t.Errorf("response missing mistral-7b target: %s", body)
+	}
+	if !strings.Contains(body, `"model":"mistral-7b"`) {
+		t.Errorf("response missing model label: %s", body)
+	}
+	if strings.Contains(body, "no-port") {
+		t.Errorf("response should omit backends with Port==0: %s", body)
+	}
+}
+
+// TestGateway_ServeModelMetrics_NotDeployed verifies that
+// GET /models/{name}/metrics returns 404 when the model is not in the registry.
+func TestGateway_ServeModelMetrics_NotDeployed(t *testing.T) {
+	gw := newTestGatewayWithRouter(t, map[string]*ModelBackend{})
+
+	req := httptest.NewRequest(http.MethodGet, "/models/mistral-7b/metrics", nil)
+	req.Header.Set("X-API-Key", "sk_test")
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestGateway_ServeModelMetrics_Proxied verifies that
+// GET /models/{name}/metrics is forwarded to the backend's /metrics endpoint.
+func TestGateway_ServeModelMetrics_Proxied(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/metrics" {
+			t.Errorf("backend received unexpected path %q", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		w.Write([]byte("# vllm metrics\nvllm_requests_total 42\n"))
+	}))
+	defer backend.Close()
+
+	gw := newTestGatewayWithRouter(t, map[string]*ModelBackend{
+		"tinyllama": {
+			Name:   "tinyllama",
+			URL:    backend.URL,
+			Port:   8000,
+			Status: "running",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/models/tinyllama/metrics", nil)
+	req.Header.Set("X-API-Key", "sk_test")
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "vllm_requests_total") {
+		t.Errorf("response missing vllm metrics: %s", w.Body.String())
+	}
+}
