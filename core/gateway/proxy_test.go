@@ -14,6 +14,7 @@ package gateway
 
 import (
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -312,5 +313,63 @@ func TestParseTokenUsage_NoUsage(t *testing.T) {
 	in, out := parseTokenUsage(body, "application/json")
 	if in != 0 || out != 0 {
 		t.Errorf("expected (0,0) got (%d,%d)", in, out)
+	}
+}
+
+func TestExtractModelName_FromBody(t *testing.T) {
+	body := `{"model":"mistral-7b","messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	name := extractModelName(req)
+	if name != "mistral-7b" {
+		t.Errorf("want mistral-7b, got %q", name)
+	}
+
+	// Body must still be readable after the peek.
+	remaining, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("body read error: %v", err)
+	}
+	if string(remaining) != body {
+		t.Errorf("body was not restored: got %q", remaining)
+	}
+}
+
+func TestExtractModelName_URLTakesPriority(t *testing.T) {
+	body := `{"model":"llama-3","messages":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/models/mistral-7b/v1/chat/completions", strings.NewReader(body))
+	name := extractModelName(req)
+	if name != "mistral-7b" {
+		t.Errorf("URL should win over body: got %q", name)
+	}
+}
+
+func TestGateway_ServeModelList(t *testing.T) {
+	router := NewModelRouter("http://localhost:9999")
+	router.mu.Lock()
+	router.registry["mistral-7b"] = &ModelBackend{Name: "mistral-7b", URL: "http://localhost:8000", Status: "running"}
+	router.registry["llama-3"]    = &ModelBackend{Name: "llama-3",    URL: "http://localhost:8001", Status: "running"}
+	router.mu.Unlock()
+
+	gw, _ := NewGateway(GatewayConfig{
+		TargetURL:   "http://localhost:8000",
+		ModelRouter: router,
+		AuditLogger: audit.NewLogger(10),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	w := httptest.NewRecorder()
+	gw.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "mistral-7b") || !strings.Contains(body, "llama-3") {
+		t.Errorf("response missing model names: %s", body)
+	}
+	if !strings.Contains(body, `"object":"list"`) {
+		t.Errorf("response missing object:list: %s", body)
 	}
 }

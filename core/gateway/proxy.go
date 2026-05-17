@@ -185,6 +185,13 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Serve the gateway-level /v1/models list before touching model routing.
+	// Authenticated users see only the models they are allowed to access.
+	if r.Method == http.MethodGet && r.URL.Path == "/v1/models" && gw.modelRouter != nil {
+		gw.serveModelList(w, userID)
+		return
+	}
+
 	// Extract model name from request if available (needed for access control)
 	modelName := extractModelName(r)
 
@@ -450,20 +457,63 @@ func getClientIP(r *http.Request) string {
 }
 
 func extractModelName(r *http.Request) string {
-	// Try to extract from URL path (e.g., /v1/models/llama-2-7b/completions)
-	parts := strings.Split(r.URL.Path, "/")
-	for i, part := range parts {
-		if part == "models" && i+1 < len(parts) {
-			return parts[i+1]
+	// URL path takes priority: /models/{name}/... or /v1/models/{name}/...
+	if name := extractModelNameFromPath(r.URL.Path); name != "" {
+		return name
+	}
+
+	// Fall back to the "model" field in the JSON request body. This supports
+	// standard OpenAI-compatible clients that send POST /v1/chat/completions
+	// with {"model": "mistral-7b", ...} rather than encoding the model in the URL.
+	if (r.Method == http.MethodPost || r.Method == http.MethodPut) && r.Body != nil {
+		// Peek at the first 512 bytes — the model field is always near the top.
+		peek := make([]byte, 512)
+		n, _ := r.Body.Read(peek)
+		peek = peek[:n]
+		// Restore the body so downstream reads (audit logging, proxy) work correctly.
+		r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(peek), r.Body))
+		var payload struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(peek, &payload); err == nil && payload.Model != "" {
+			return payload.Model
 		}
 	}
 
-	// Try to extract from request body JSON (common in OpenAI-compatible APIs)
-	if r.Method == "POST" && r.Body != nil {
-		// Would need JSON parsing here, skipping for now
+	return "unknown"
+}
+
+// serveModelList writes an OpenAI-compatible GET /v1/models response containing
+// all currently deployed models the authenticated user is allowed to access.
+func (gw *Gateway) serveModelList(w http.ResponseWriter, userID string) {
+	type modelEntry struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
+		OwnedBy string `json:"owned_by"`
+	}
+	type modelList struct {
+		Object string       `json:"object"`
+		Data   []modelEntry `json:"data"`
 	}
 
-	return "unknown"
+	backends := gw.modelRouter.ListModels()
+	now := time.Now().Unix()
+	data := make([]modelEntry, 0, len(backends))
+	for _, b := range backends {
+		if gw.accessController != nil && userID != "" && !gw.accessController.CanAccess(userID, b.Name) {
+			continue
+		}
+		data = append(data, modelEntry{
+			ID:      b.Name,
+			Object:  "model",
+			Created: now,
+			OwnedBy: "sovereignstack",
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(modelList{Object: "list", Data: data})
 }
 
 func generateCorrelationID() string {
