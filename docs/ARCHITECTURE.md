@@ -9,16 +9,21 @@ deployment option.
 ## Topology
 
 ```
-  API client (curl, SDK)
+  API client (curl, OpenCode, SDK)
        │
-       │ HTTPS
+       │  POST /v1/chat/completions          ← standard OpenAI URL
+       │  {"model": "mistral-7b", ...}       ← model in body  (or)
+       │  POST /models/mistral-7b/v1/chat/completions  ← model in URL
+       │
        ▼
-  ┌──────────────────────────────────────┐
-  │  Gateway (:8001)                     │
-  │  Auth → Access → Quota → Rate-limit  │
-  │  → Routing → Reverse proxy           │
-  │  Exposes Prometheus /metrics         │
-  └──────────┬─────────────────┬─────────┘
+  ┌──────────────────────────────────────────────┐
+  │  Gateway (:8001)                             │
+  │  Auth → Access → Quota → Rate-limit          │
+  │  → Model selection (URL path or body field)  │
+  │  → Reverse proxy to model container          │
+  │  GET /v1/models  — list deployed models      │
+  │  GET /metrics    — Prometheus exposition     │
+  └──────────┬─────────────────┬─────────────────┘
              │ poll            │ proxy /v1/...
              ▼                 ▼
   ┌────────────────────┐  ┌────────────────────┐
@@ -44,8 +49,11 @@ The hot path. Every API client request flows through here. In order:
    IPs not in `IPAllowlist`
 4. **Quota check** — pre-flight against daily / monthly token caps
 5. **Rate limit** — token-bucket per user
-6. **Model routing** — `/v1/models/{name}/...` rewritten to the model
-   container's port (registry refreshed every 30s from `discovery`)
+6. **Model selection** — model name resolved from the URL path
+   (`/models/{name}/v1/...`) or from the `"model"` field in the JSON
+   request body (standard OpenAI-compatible format). Registry refreshed
+   every 30s from `discovery`. `GET /v1/models` returns the list of
+   currently deployed models filtered to what the user can access.
 7. **Reverse proxy** — forwards to the model container, captures status & latency
 8. **Metrics** — atomic counters + Prometheus text format on `/metrics`
 9. **Audit** — request / response logged to SQLite + (optional) JSONL
@@ -145,7 +153,8 @@ Counters reset at UTC midnight (daily) and on the 1st of each month
 
 A single chat-completions call exercises every layer:
 
-1. Client sends `POST /v1/models/mistral-7b/chat/completions` + `X-API-Key`
+1. Client sends `POST /v1/chat/completions` with `{"model":"mistral-7b",...}` + `X-API-Key`
+   (or the equivalent URL-prefixed form `/models/mistral-7b/v1/chat/completions`)
 2. Gateway: argon2 verify → resolves `userID = alice`
 3. Gateway: alice's `allowed_models` includes `mistral-7b` → pass
 4. Gateway: alice has quota remaining → pass
