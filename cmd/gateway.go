@@ -333,10 +333,7 @@ func runGateway(cmd *cobra.Command, args []string) error {
 	})
 
 	// Add metrics endpoint (Phase 4)
-	http.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		w.Write([]byte(metrics.WritePrometheusText()))
-	})
+	http.Handle("/metrics", metrics.HTTPHandler())
 
 	// Health probes (Phase A5)
 	healthChecker := health.New()

@@ -95,7 +95,7 @@ if [ "$FORCE_BUILD" = true ]; then
   log "rebuilding sovereignstack image (--build)"
   # Only the policy service has a `build:` section in docker-compose.yml;
   # the other three reuse the same `sovereignstack:latest` image.
-  docker compose build policy 2>&1 | tail -5 | sed 's/^/  /'
+  COMPOSE_BAKE=false docker compose build policy
 fi
 
 # Run containers as the host user so files written into the bind-mounted
@@ -152,11 +152,12 @@ fi
 # gateway loads keys.json once at startup, so any user we add after the
 # gateway starts is invisible to it.
 log "starting management-side services: ${MGMT_SERVICES[*]}"
-docker compose up -d "${MGMT_SERVICES[@]}" 2>&1 | tail -5 | sed 's/^/  /'
+docker compose up -d "${MGMT_SERVICES[@]}"
 
 wait_healthy() {
   local svc="$1" tries=30
   local state=""
+  printf "${BLUE}[docker-stack]${NC} waiting for %s to be healthy " "$svc"
   while [ "$tries" -gt 0 ]; do
     state="$(docker compose ps --format json "$svc" 2>/dev/null \
              | python3 -c 'import sys,json
@@ -166,12 +167,15 @@ try:
 except Exception:
     print("unknown")' 2>/dev/null)"
     if [ "$state" = "healthy" ]; then
+      printf " done\n"
       ok "$svc healthy"
       return 0
     fi
+    printf "."
     tries=$((tries-1))
     sleep 1
   done
+  printf "\n"
   warn "$svc not healthy after 30s — continuing; check 'docker compose logs $svc'"
   return 1
 }
@@ -209,7 +213,7 @@ if [ "$WITH_MONITORING" = true ]; then
   SERVICES+=("${MONITOR_SERVICES[@]}")
 fi
 log "starting ${SERVICES[*]}"
-docker compose up -d "${SERVICES[@]}" 2>&1 | tail -5 | sed 's/^/  /'
+docker compose up -d "${SERVICES[@]}"
 wait_healthy gateway
 
 # ─── Banner ───────────────────────────────────────────────────────────────────

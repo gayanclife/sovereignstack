@@ -201,6 +201,13 @@ func (r *ModelRouter) fetchCapability(backend *ModelBackend) {
 // then forwards as-is and the worst case is the model's own 404 — same
 // behavior as before this method existed.
 func (b *ModelBackend) IsPathSupported(strippedPath string) (ok bool) {
+	// /v1/models is the OpenAI-standard introspection endpoint that reports
+	// capability and supported endpoints. It must always be allowed through
+	// regardless of the model's inference capability so that clients can
+	// discover what a model supports before sending a request.
+	if strippedPath == "/v1/models" {
+		return true
+	}
 	if len(b.Endpoints) == 0 {
 		return true
 	}

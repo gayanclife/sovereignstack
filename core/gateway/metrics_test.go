@@ -1,136 +1,130 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+Copyright 2026 SovereignStack Authors.
 
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 package gateway
 
 import (
 	"strings"
 	"testing"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestGatewayMetrics_RecordRequest(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordRequest()
 	m.RecordRequest()
 	m.RecordRequest()
 
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["requests_total"] != int64(3) {
-		t.Errorf("Expected requests_total=3, got %d", snapshot["requests_total"])
+	if v := testutil.ToFloat64(m.requestsTotal); v != 3 {
+		t.Errorf("requests_total: want 3, got %v", v)
 	}
-	if snapshot["active_requests"] != int64(3) {
-		t.Errorf("Expected active_requests=3, got %d", snapshot["active_requests"])
+	if v := testutil.ToFloat64(m.activeRequests); v != 3 {
+		t.Errorf("active_requests: want 3, got %v", v)
 	}
 }
 
 func TestGatewayMetrics_RecordRequestComplete(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordRequest()
 	m.RecordRequestComplete(200, "POST", "alice", "mistral-7b")
-
 	m.RecordRequest()
 	m.RecordRequestComplete(403, "POST", "alice", "llama-3")
 
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["active_requests"] != int64(0) {
-		t.Errorf("Expected active_requests=0, got %d", snapshot["active_requests"])
+	if v := testutil.ToFloat64(m.activeRequests); v != 0 {
+		t.Errorf("active_requests: want 0, got %v", v)
+	}
+	if v := testutil.ToFloat64(m.requestsTotal); v != 2 {
+		t.Errorf("requests_total: want 2, got %v", v)
 	}
 }
 
 func TestGatewayMetrics_RecordLatency(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordLatency("mistral-7b", 100)
 	m.RecordLatency("mistral-7b", 150)
 	m.RecordLatency("mistral-7b", 200)
 
-	text := m.WritePrometheusText()
-	if !strings.Contains(text, "gateway_request_duration_seconds") {
-		t.Errorf("Expected latency metrics in output")
+	// Histogram should have 3 observations.
+	count, err := testutil.GatherAndCount(m.registry)
+	if err != nil {
+		t.Fatalf("gather error: %v", err)
+	}
+	if count == 0 {
+		t.Errorf("expected metrics from registry, got 0 families")
 	}
 }
 
 func TestGatewayMetrics_RecordTokens(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordTokens("alice", "mistral-7b", 100, 250)
 	m.RecordTokens("alice", "mistral-7b", 50, 150)
 	m.RecordTokens("bob", "llama-3", 75, 100)
 
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["tokens_input_total"] != int64(225) {
-		t.Errorf("Expected tokens_input_total=225, got %d", snapshot["tokens_input_total"])
+	if v := testutil.ToFloat64(m.tokensInputTotal); v != 225 {
+		t.Errorf("tokens_input_total: want 225, got %v", v)
 	}
-	if snapshot["tokens_output_total"] != int64(500) {
-		t.Errorf("Expected tokens_output_total=500, got %d", snapshot["tokens_output_total"])
+	if v := testutil.ToFloat64(m.tokensOutputTotal); v != 500 {
+		t.Errorf("tokens_output_total: want 500, got %v", v)
 	}
 }
 
 func TestGatewayMetrics_RecordAuthFailure(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordAuthFailure("invalid_key")
 	m.RecordAuthFailure("invalid_key")
 	m.RecordAuthFailure("missing_key")
 
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["auth_failures_total"] != int64(3) {
-		t.Errorf("Expected auth_failures_total=3, got %d", snapshot["auth_failures_total"])
+	if v := testutil.ToFloat64(m.authFailuresTotal); v != 3 {
+		t.Errorf("auth_failures_total: want 3, got %v", v)
 	}
 }
 
 func TestGatewayMetrics_RecordAccessDenied(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordAccessDenied("alice")
 	m.RecordAccessDenied("alice")
 	m.RecordAccessDenied("bob")
 
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["access_denied_total"] != int64(3) {
-		t.Errorf("Expected access_denied_total=3, got %d", snapshot["access_denied_total"])
+	if v := testutil.ToFloat64(m.accessDeniedTotal); v != 3 {
+		t.Errorf("access_denied_total: want 3, got %v", v)
 	}
 }
 
 func TestGatewayMetrics_RecordRateLimitHit(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	for i := 0; i < 5; i++ {
 		m.RecordRateLimitHit()
 	}
-
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["rate_limit_hits_total"] != int64(5) {
-		t.Errorf("Expected rate_limit_hits_total=5, got %d", snapshot["rate_limit_hits_total"])
+	if v := testutil.ToFloat64(m.rateLimitHitsTotal); v != 5 {
+		t.Errorf("rate_limit_hits_total: want 5, got %v", v)
 	}
 }
 
 func TestGatewayMetrics_RecordTokenQuotaExceeded(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordTokenQuotaExceeded()
 	m.RecordTokenQuotaExceeded()
 
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["token_quota_exceeded_total"] != int64(2) {
-		t.Errorf("Expected token_quota_exceeded_total=2, got %d", snapshot["token_quota_exceeded_total"])
+	if v := testutil.ToFloat64(m.tokenQuotaExceededTotal); v != 2 {
+		t.Errorf("token_quota_exceeded_total: want 2, got %v", v)
 	}
 }
 
-func TestGatewayMetrics_WritePrometheusText_Format(t *testing.T) {
+func TestGatewayMetrics_HTTPHandler_Format(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordRequest()
 	m.RecordRequest()
 	m.RecordRequestComplete(200, "POST", "alice", "mistral-7b")
@@ -138,31 +132,24 @@ func TestGatewayMetrics_WritePrometheusText_Format(t *testing.T) {
 	m.RecordAuthFailure("invalid_key")
 	m.RecordAccessDenied("bob")
 
-	text := m.WritePrometheusText()
+	// Scrape via the HTTP handler.
+	body := scrapeMetrics(t, m)
 
-	// Check for HELP and TYPE lines
-	if !strings.Contains(text, "# HELP gateway_requests_total") {
-		t.Errorf("Missing HELP comment for requests_total")
-	}
-	if !strings.Contains(text, "# TYPE gateway_requests_total counter") {
-		t.Errorf("Missing TYPE comment for requests_total")
-	}
-
-	// Check for actual metrics
-	if !strings.Contains(text, "gateway_requests_total 2") {
-		t.Errorf("Expected gateway_requests_total 2 in output")
-	}
-	if !strings.Contains(text, "gateway_auth_failures_total 1") {
-		t.Errorf("Expected gateway_auth_failures_total 1 in output")
-	}
-	if !strings.Contains(text, "gateway_access_denied_total 1") {
-		t.Errorf("Expected gateway_access_denied_total 1 in output")
+	for _, want := range []string{
+		"gateway_requests_total 2",
+		"gateway_auth_failures_total 1",
+		"gateway_access_denied_total 1",
+		"gateway_tokens_input_total 100",
+		"gateway_tokens_output_total 200",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics output missing %q\ngot:\n%s", want, body)
+		}
 	}
 }
 
-func TestGatewayMetrics_WritePrometheusText_ByStatus(t *testing.T) {
+func TestGatewayMetrics_ByStatus(t *testing.T) {
 	m := NewGatewayMetrics()
-
 	m.RecordRequest()
 	m.RecordRequestComplete(200, "POST", "alice", "mistral-7b")
 	m.RecordRequest()
@@ -170,16 +157,16 @@ func TestGatewayMetrics_WritePrometheusText_ByStatus(t *testing.T) {
 	m.RecordRequest()
 	m.RecordRequestComplete(500, "POST", "alice", "mistral-7b")
 
-	text := m.WritePrometheusText()
+	body := scrapeMetrics(t, m)
 
-	if !strings.Contains(text, "gateway_requests_by_status{status=\"200\"}") {
-		t.Errorf("Expected status 200 in output")
-	}
-	if !strings.Contains(text, "gateway_requests_by_status{status=\"403\"}") {
-		t.Errorf("Expected status 403 in output")
-	}
-	if !strings.Contains(text, "gateway_requests_by_status{status=\"500\"}") {
-		t.Errorf("Expected status 500 in output")
+	for _, want := range []string{
+		`gateway_requests_by_status{status="OK"}`,
+		`gateway_requests_by_status{status="Forbidden"}`,
+		`gateway_requests_by_status{status="Internal Server Error"}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("metrics output missing %q", want)
+		}
 	}
 }
 
@@ -197,24 +184,23 @@ func TestGatewayMetrics_Concurrency(t *testing.T) {
 			done <- true
 		}(i)
 	}
-
 	for i := 0; i < 10; i++ {
 		<-done
 	}
 
-	snapshot := m.GetMetricsSnapshot()
-	if snapshot["requests_total"] != int64(1000) {
-		t.Errorf("Expected requests_total=1000, got %d", snapshot["requests_total"])
+	if v := testutil.ToFloat64(m.requestsTotal); v != 1000 {
+		t.Errorf("requests_total: want 1000, got %v", v)
 	}
-	if snapshot["active_requests"] != int64(0) {
-		t.Errorf("Expected active_requests=0, got %d", snapshot["active_requests"])
+	if v := testutil.ToFloat64(m.activeRequests); v != 0 {
+		t.Errorf("active_requests: want 0, got %v", v)
 	}
-	if snapshot["tokens_input_total"] != int64(100000) {
-		t.Errorf("Expected tokens_input_total=100000, got %d", snapshot["tokens_input_total"])
+	if v := testutil.ToFloat64(m.tokensInputTotal); v != 100000 {
+		t.Errorf("tokens_input_total: want 100000, got %v", v)
 	}
 }
 
 // Benchmark tests
+
 func BenchmarkGatewayMetrics_RecordRequest(b *testing.B) {
 	m := NewGatewayMetrics()
 	b.ResetTimer()
@@ -240,16 +226,25 @@ func BenchmarkGatewayMetrics_RecordTokens(b *testing.B) {
 	}
 }
 
-func BenchmarkGatewayMetrics_WritePrometheusText(b *testing.B) {
+func BenchmarkGatewayMetrics_RecordLatency(b *testing.B) {
+	m := NewGatewayMetrics()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		m.RecordLatency("mistral-7b", 250)
+	}
+}
+
+func BenchmarkGatewayMetrics_Scrape(b *testing.B) {
 	m := NewGatewayMetrics()
 	for i := 0; i < 100; i++ {
 		m.RecordRequest()
 		m.RecordRequestComplete(200, "POST", "alice", "mistral-7b")
 		m.RecordTokens("alice", "mistral-7b", 100, 200)
+		m.RecordLatency("mistral-7b", 250)
 	}
-
+	h := m.HTTPHandler()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = m.WritePrometheusText()
+		benchmarkScrape(h)
 	}
 }

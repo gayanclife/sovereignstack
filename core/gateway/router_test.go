@@ -424,9 +424,13 @@ func TestExtractModelNameFromPath_Valid(t *testing.T) {
 		path     string
 		expected string
 	}{
+		// SovereignStack native format
 		{"/models/mistral-7b/v1/chat/completions", "mistral-7b"},
 		{"/models/llama-3-8b/v1/embeddings", "llama-3-8b"},
 		{"/models/phi-3/v1/completions", "phi-3"},
+		// OpenAI-style prefix format
+		{"/v1/models/mistral-7b/chat/completions", "mistral-7b"},
+		{"/v1/models/llama-3-8b/embeddings", "llama-3-8b"},
 	}
 
 	for _, test := range tests {
@@ -439,7 +443,8 @@ func TestExtractModelNameFromPath_Valid(t *testing.T) {
 
 func TestExtractModelNameFromPath_Invalid(t *testing.T) {
 	tests := []string{
-		"/v1/models",
+		"/v1/models",                   // listing endpoint — no model name
+		"/v1/models/mistral-7b",        // get-model-by-id — no trailing path
 		"/v1/chat/completions",
 		"/api/v1/health",
 		"/models/",
@@ -455,13 +460,19 @@ func TestExtractModelNameFromPath_Invalid(t *testing.T) {
 
 func TestStripModelPrefixFromPath(t *testing.T) {
 	tests := []struct {
-		path      string
-		model     string
-		expected  string
+		path     string
+		model    string
+		expected string
 	}{
+		// SovereignStack native format
 		{"/models/mistral-7b/v1/chat/completions", "mistral-7b", "/v1/chat/completions"},
 		{"/models/llama-3-8b/v1/embeddings", "llama-3-8b", "/v1/embeddings"},
 		{"/models/phi-3/v1/completions", "phi-3", "/v1/completions"},
+		// OpenAI-style prefix format
+		{"/v1/models/mistral-7b/chat/completions", "mistral-7b", "/v1/chat/completions"},
+		{"/v1/models/llama-3-8b/embeddings", "llama-3-8b", "/v1/embeddings"},
+		// Partial-name collision must not match
+		{"/models/llama-3-8b/v1/chat/completions", "llama", "/models/llama-3-8b/v1/chat/completions"},
 	}
 
 	for _, test := range tests {

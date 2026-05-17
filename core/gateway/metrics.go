@@ -1,325 +1,246 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+Copyright 2026 SovereignStack Authors.
 
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
 package gateway
 
 import (
-	"fmt"
-	"sort"
-	"strings"
-	"sync"
-	"sync/atomic"
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// GatewayMetrics tracks Prometheus metrics for the gateway
+// GatewayMetrics holds all Prometheus collectors for the gateway.
+//
+// Recording methods (RecordRequest, RecordTokens, etc.) are the hot path and
+// map directly to prometheus atomic operations — no additional locking or
+// allocation occurs per-request. Latency is stored in a HistogramVec whose
+// Observe() path holds a single short-lived lock per label combination, which
+// is negligible compared to the round-trip to the model backend.
+//
+// The registry is private so Go runtime and process collectors are NOT
+// included — node-exporter covers those.
 type GatewayMetrics struct {
-	// Counters (hot path - use atomic)
-	requestsTotal            int64 // Total requests
-	authFailuresTotal        int64 // Auth failures
-	accessDeniedTotal        int64 // Access denials
-	rateLimitHitsTotal       int64 // Rate limit rejections
-	tokenQuotaExceededTotal  int64 // Token quota rejections
-	admissionShedTotal       int64 // Host-aware admission rejections
-	tokensInputTotal         int64 // Total input tokens
-	tokensOutputTotal        int64 // Total output tokens
-	activeRequests           int64 // Currently processing requests
+	registry *prometheus.Registry
 
-	// Labeled counters (require locking)
-	mu                  sync.RWMutex
-	requestsByUserModel map[string]int64      // "user:model" → count
-	requestsByStatus    map[string]int64      // "status_code" → count
-	requestsByMethod    map[string]int64      // "method" → count
-	tokensByUserModel   map[string][2]int64   // "user:model" → [input, output]
-	latencyByModel      map[string][]int64    // "model" → latencies in ms
-	accessDeniedByUser  map[string]int64      // "user" → count
-	authFailuresByReason map[string]int64     // "reason" → count
-	admissionShedByModel map[string]int64     // "model" → count
+	requestsTotal           prometheus.Counter
+	activeRequests          prometheus.Gauge
+	tokensInputTotal        prometheus.Counter
+	tokensOutputTotal       prometheus.Counter
+	authFailuresTotal       prometheus.Counter
+	accessDeniedTotal       prometheus.Counter
+	rateLimitHitsTotal      prometheus.Counter
+	tokenQuotaExceededTotal prometheus.Counter
+	admissionShedTotal      prometheus.Counter
+
+	requestsByStatus     *prometheus.CounterVec
+	requestsByMethod     *prometheus.CounterVec
+	requestsByUserModel  *prometheus.CounterVec
+	tokensByUserModel    *prometheus.CounterVec
+	accessDeniedByUser   *prometheus.CounterVec
+	authFailuresByReason *prometheus.CounterVec
+	admissionShedByModel *prometheus.CounterVec
+
+	// HistogramVec for per-model latency. Buckets cover the full LLM latency
+	// spectrum: fast embeddings (50ms) through slow long-form generation (60s).
+	requestDuration *prometheus.HistogramVec
 }
 
-// NewGatewayMetrics creates a new metrics tracker
+// llmLatencyBuckets covers the range from fast embedding calls to slow
+// long-form generation responses.
+var llmLatencyBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60}
+
+// NewGatewayMetrics creates and registers all collectors on a private registry.
 func NewGatewayMetrics() *GatewayMetrics {
-	return &GatewayMetrics{
-		requestsByUserModel:  make(map[string]int64),
-		requestsByStatus:     make(map[string]int64),
-		requestsByMethod:     make(map[string]int64),
-		tokensByUserModel:    make(map[string][2]int64),
-		latencyByModel:       make(map[string][]int64),
-		accessDeniedByUser:   make(map[string]int64),
-		authFailuresByReason: make(map[string]int64),
-		admissionShedByModel: make(map[string]int64),
+	reg := prometheus.NewRegistry()
+
+	m := &GatewayMetrics{
+		registry: reg,
+
+		requestsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_requests_total",
+			Help: "Total HTTP requests received by the gateway.",
+		}),
+		activeRequests: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "gateway_active_requests",
+			Help: "Requests currently being processed.",
+		}),
+		tokensInputTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_tokens_input_total",
+			Help: "Total prompt tokens forwarded to backends.",
+		}),
+		tokensOutputTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_tokens_output_total",
+			Help: "Total completion tokens returned from backends.",
+		}),
+		authFailuresTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_auth_failures_total",
+			Help: "Total authentication failures.",
+		}),
+		accessDeniedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_access_denied_total",
+			Help: "Total access-denied rejections.",
+		}),
+		rateLimitHitsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_rate_limit_hits_total",
+			Help: "Total requests rejected by the per-user rate limiter.",
+		}),
+		tokenQuotaExceededTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_token_quota_exceeded_total",
+			Help: "Total requests rejected because the user's token quota was exhausted.",
+		}),
+		admissionShedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "gateway_admission_shed_total",
+			Help: "Total requests shed by the host-aware admission controller.",
+		}),
+
+		requestsByStatus: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_requests_by_status",
+			Help: "Requests broken down by HTTP status code.",
+		}, []string{"status"}),
+
+		requestsByMethod: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_requests_by_method",
+			Help: "Requests broken down by HTTP method.",
+		}, []string{"method"}),
+
+		requestsByUserModel: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_requests_by_user_model",
+			Help: "Successful requests broken down by user and model.",
+		}, []string{"user", "model"}),
+
+		tokensByUserModel: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_tokens_by_user_model",
+			Help: "Token usage broken down by user, model, and direction (input/output).",
+		}, []string{"user", "model", "direction"}),
+
+		accessDeniedByUser: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_access_denied_by_user",
+			Help: "Access-denied events broken down by user.",
+		}, []string{"user"}),
+
+		authFailuresByReason: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_auth_failures_by_reason",
+			Help: "Authentication failures broken down by reason.",
+		}, []string{"reason"}),
+
+		admissionShedByModel: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "gateway_admission_shed_by_model",
+			Help: "Admission-shed events broken down by target model.",
+		}, []string{"model"}),
+
+		requestDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Name:    "gateway_request_duration_seconds",
+			Help:    "End-to-end request latency from gateway receipt to backend response.",
+			Buckets: llmLatencyBuckets,
+		}, []string{"model"}),
 	}
+
+	reg.MustRegister(
+		m.requestsTotal,
+		m.activeRequests,
+		m.tokensInputTotal,
+		m.tokensOutputTotal,
+		m.authFailuresTotal,
+		m.accessDeniedTotal,
+		m.rateLimitHitsTotal,
+		m.tokenQuotaExceededTotal,
+		m.admissionShedTotal,
+		m.requestsByStatus,
+		m.requestsByMethod,
+		m.requestsByUserModel,
+		m.tokensByUserModel,
+		m.accessDeniedByUser,
+		m.authFailuresByReason,
+		m.admissionShedByModel,
+		m.requestDuration,
+	)
+
+	return m
 }
 
-// RecordRequest increments total request count
+// HTTPHandler returns an http.Handler that serves the Prometheus text format.
+// Mount it at /metrics on the gateway mux.
+func (m *GatewayMetrics) HTTPHandler() http.Handler {
+	return promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
+}
+
+// RecordRequest increments the total and active request counters.
 func (m *GatewayMetrics) RecordRequest() {
-	atomic.AddInt64(&m.requestsTotal, 1)
-	atomic.AddInt64(&m.activeRequests, 1)
+	m.requestsTotal.Inc()
+	m.activeRequests.Inc()
 }
 
-// RecordRequestComplete decrements active requests and records status/method/user/model
+// RecordRequestComplete decrements active requests and records per-status,
+// per-method, and per-user/model breakdowns.
 func (m *GatewayMetrics) RecordRequestComplete(statusCode int, method, userID, modelName string) {
-	atomic.AddInt64(&m.activeRequests, -1)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Record by status code
-	statusKey := fmt.Sprintf("%d", statusCode)
-	m.requestsByStatus[statusKey]++
-
-	// Record by method
-	m.requestsByMethod[method]++
-
-	// Record by user and model
+	m.activeRequests.Dec()
+	m.requestsByStatus.WithLabelValues(http.StatusText(statusCode)).Inc()
+	m.requestsByMethod.WithLabelValues(method).Inc()
 	if userID != "" && modelName != "" {
-		key := userID + ":" + modelName
-		m.requestsByUserModel[key]++
+		m.requestsByUserModel.WithLabelValues(userID, modelName).Inc()
 	}
 }
 
-// RecordLatency records request latency for a model
+// RecordLatency records end-to-end latency for a model in milliseconds.
+// Converted to seconds internally to match Prometheus conventions.
 func (m *GatewayMetrics) RecordLatency(modelName string, latencyMs int64) {
 	if modelName == "" {
 		return
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.latencyByModel[modelName] = append(m.latencyByModel[modelName], latencyMs)
+	m.requestDuration.WithLabelValues(modelName).Observe(float64(latencyMs) / 1000.0)
 }
 
-// RecordTokens records token usage for a user and model
+// RecordTokens records prompt and completion token counts.
 func (m *GatewayMetrics) RecordTokens(userID, modelName string, inputTokens, outputTokens int64) {
-	atomic.AddInt64(&m.tokensInputTotal, inputTokens)
-	atomic.AddInt64(&m.tokensOutputTotal, outputTokens)
-
-	if userID == "" || modelName == "" {
-		return
+	m.tokensInputTotal.Add(float64(inputTokens))
+	m.tokensOutputTotal.Add(float64(outputTokens))
+	if userID != "" && modelName != "" {
+		m.tokensByUserModel.WithLabelValues(userID, modelName, "input").Add(float64(inputTokens))
+		m.tokensByUserModel.WithLabelValues(userID, modelName, "output").Add(float64(outputTokens))
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	key := userID + ":" + modelName
-	current := m.tokensByUserModel[key]
-	current[0] += inputTokens
-	current[1] += outputTokens
-	m.tokensByUserModel[key] = current
 }
 
-// RecordAuthFailure records an authentication failure
+// RecordAuthFailure records an authentication failure with a reason label.
 func (m *GatewayMetrics) RecordAuthFailure(reason string) {
-	atomic.AddInt64(&m.authFailuresTotal, 1)
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.authFailuresByReason[reason]++
+	m.authFailuresTotal.Inc()
+	m.authFailuresByReason.WithLabelValues(reason).Inc()
 }
 
-// RecordAccessDenied records an access denied event
+// RecordAccessDenied records an access-denied event for a user.
 func (m *GatewayMetrics) RecordAccessDenied(userID string) {
-	atomic.AddInt64(&m.accessDeniedTotal, 1)
-
-	if userID == "" {
-		return
+	m.accessDeniedTotal.Inc()
+	if userID != "" {
+		m.accessDeniedByUser.WithLabelValues(userID).Inc()
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	m.accessDeniedByUser[userID]++
 }
 
-// RecordRateLimitHit records a rate limit rejection
+// RecordRateLimitHit records a rate-limit rejection.
 func (m *GatewayMetrics) RecordRateLimitHit() {
-	atomic.AddInt64(&m.rateLimitHitsTotal, 1)
+	m.rateLimitHitsTotal.Inc()
 }
 
-// RecordTokenQuotaExceeded records a token quota rejection
+// RecordTokenQuotaExceeded records a token-quota rejection.
 func (m *GatewayMetrics) RecordTokenQuotaExceeded() {
-	atomic.AddInt64(&m.tokenQuotaExceededTotal, 1)
+	m.tokenQuotaExceededTotal.Inc()
 }
 
-// RecordAdmissionShed records a host-aware admission rejection. modelName
-// may be empty when the request came in without a recognizable model
-// (e.g. a probe at /v1/models with no name in the URL).
+// RecordAdmissionShed records a host-aware admission rejection.
 func (m *GatewayMetrics) RecordAdmissionShed(modelName string) {
-	atomic.AddInt64(&m.admissionShedTotal, 1)
-	if modelName == "" {
-		return
+	m.admissionShedTotal.Inc()
+	if modelName != "" {
+		m.admissionShedByModel.WithLabelValues(modelName).Inc()
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.admissionShedByModel[modelName]++
-}
-
-// WritePrometheusText writes metrics in Prometheus text format
-func (m *GatewayMetrics) WritePrometheusText() string {
-	var output strings.Builder
-
-	output.WriteString("# HELP gateway_requests_total Total HTTP requests processed\n")
-	output.WriteString("# TYPE gateway_requests_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_requests_total %d\n", atomic.LoadInt64(&m.requestsTotal)))
-	output.WriteString("\n")
-
-	output.WriteString("# HELP gateway_active_requests Currently active requests\n")
-	output.WriteString("# TYPE gateway_active_requests gauge\n")
-	output.WriteString(fmt.Sprintf("gateway_active_requests %d\n", atomic.LoadInt64(&m.activeRequests)))
-	output.WriteString("\n")
-
-	// Requests by status
-	output.WriteString("# HELP gateway_requests_by_status Requests by status code\n")
-	output.WriteString("# TYPE gateway_requests_by_status counter\n")
-	m.mu.RLock()
-	statusKeys := make([]string, 0, len(m.requestsByStatus))
-	for k := range m.requestsByStatus {
-		statusKeys = append(statusKeys, k)
-	}
-	sort.Strings(statusKeys)
-	for _, status := range statusKeys {
-		output.WriteString(fmt.Sprintf("gateway_requests_by_status{status=\"%s\"} %d\n", status, m.requestsByStatus[status]))
-	}
-	m.mu.RUnlock()
-	output.WriteString("\n")
-
-	// Requests by method
-	output.WriteString("# HELP gateway_requests_by_method Requests by HTTP method\n")
-	output.WriteString("# TYPE gateway_requests_by_method counter\n")
-	m.mu.RLock()
-	methodKeys := make([]string, 0, len(m.requestsByMethod))
-	for k := range m.requestsByMethod {
-		methodKeys = append(methodKeys, k)
-	}
-	sort.Strings(methodKeys)
-	for _, method := range methodKeys {
-		output.WriteString(fmt.Sprintf("gateway_requests_by_method{method=\"%s\"} %d\n", method, m.requestsByMethod[method]))
-	}
-	m.mu.RUnlock()
-	output.WriteString("\n")
-
-	// Tokens total
-	output.WriteString("# HELP gateway_tokens_input_total Total input tokens\n")
-	output.WriteString("# TYPE gateway_tokens_input_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_tokens_input_total %d\n", atomic.LoadInt64(&m.tokensInputTotal)))
-	output.WriteString("\n")
-
-	output.WriteString("# HELP gateway_tokens_output_total Total output tokens\n")
-	output.WriteString("# TYPE gateway_tokens_output_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_tokens_output_total %d\n", atomic.LoadInt64(&m.tokensOutputTotal)))
-	output.WriteString("\n")
-
-	// Auth failures
-	output.WriteString("# HELP gateway_auth_failures_total Total authentication failures\n")
-	output.WriteString("# TYPE gateway_auth_failures_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_auth_failures_total %d\n", atomic.LoadInt64(&m.authFailuresTotal)))
-	output.WriteString("\n")
-
-	// Access denied
-	output.WriteString("# HELP gateway_access_denied_total Total access denied events\n")
-	output.WriteString("# TYPE gateway_access_denied_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_access_denied_total %d\n", atomic.LoadInt64(&m.accessDeniedTotal)))
-	output.WriteString("\n")
-
-	// Rate limit hits
-	output.WriteString("# HELP gateway_rate_limit_hits_total Total rate limit rejections\n")
-	output.WriteString("# TYPE gateway_rate_limit_hits_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_rate_limit_hits_total %d\n", atomic.LoadInt64(&m.rateLimitHitsTotal)))
-	output.WriteString("\n")
-
-	// Token quota exceeded
-	output.WriteString("# HELP gateway_token_quota_exceeded_total Total token quota rejections\n")
-	output.WriteString("# TYPE gateway_token_quota_exceeded_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_token_quota_exceeded_total %d\n", atomic.LoadInt64(&m.tokenQuotaExceededTotal)))
-	output.WriteString("\n")
-
-	// Admission rejections (host-aware circuit breaker).
-	output.WriteString("# HELP gateway_admission_shed_total Total host-aware admission rejections\n")
-	output.WriteString("# TYPE gateway_admission_shed_total counter\n")
-	output.WriteString(fmt.Sprintf("gateway_admission_shed_total %d\n", atomic.LoadInt64(&m.admissionShedTotal)))
-	output.WriteString("\n")
-
-	output.WriteString("# HELP gateway_admission_shed_by_model Admission rejections per target model\n")
-	output.WriteString("# TYPE gateway_admission_shed_by_model counter\n")
-	m.mu.RLock()
-	admissionKeys := make([]string, 0, len(m.admissionShedByModel))
-	for k := range m.admissionShedByModel {
-		admissionKeys = append(admissionKeys, k)
-	}
-	sort.Strings(admissionKeys)
-	for _, model := range admissionKeys {
-		output.WriteString(fmt.Sprintf("gateway_admission_shed_by_model{model=\"%s\"} %d\n",
-			model, m.admissionShedByModel[model]))
-	}
-	m.mu.RUnlock()
-	output.WriteString("\n")
-
-	// Per-model latency percentiles
-	output.WriteString("# HELP gateway_request_duration_seconds Request duration percentiles\n")
-	output.WriteString("# TYPE gateway_request_duration_seconds summary\n")
-	m.mu.RLock()
-	modelKeys := make([]string, 0, len(m.latencyByModel))
-	for k := range m.latencyByModel {
-		modelKeys = append(modelKeys, k)
-	}
-	sort.Strings(modelKeys)
-	for _, model := range modelKeys {
-		latencies := m.latencyByModel[model]
-		if len(latencies) > 0 {
-			sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
-			p50 := latencies[len(latencies)/2]
-			p95 := latencies[int(float64(len(latencies))*0.95)]
-			p99 := latencies[int(float64(len(latencies))*0.99)]
-
-			output.WriteString(fmt.Sprintf("gateway_request_duration_seconds{model=\"%s\",quantile=\"0.5\"} %d\n", model, p50))
-			output.WriteString(fmt.Sprintf("gateway_request_duration_seconds{model=\"%s\",quantile=\"0.95\"} %d\n", model, p95))
-			output.WriteString(fmt.Sprintf("gateway_request_duration_seconds{model=\"%s\",quantile=\"0.99\"} %d\n", model, p99))
-		}
-	}
-	m.mu.RUnlock()
-	output.WriteString("\n")
-
-	return output.String()
-}
-
-// GetMetricsSnapshot returns a snapshot of all metrics
-func (m *GatewayMetrics) GetMetricsSnapshot() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return map[string]interface{}{
-		"requests_total":           atomic.LoadInt64(&m.requestsTotal),
-		"active_requests":          atomic.LoadInt64(&m.activeRequests),
-		"auth_failures_total":      atomic.LoadInt64(&m.authFailuresTotal),
-		"access_denied_total":      atomic.LoadInt64(&m.accessDeniedTotal),
-		"rate_limit_hits_total":    atomic.LoadInt64(&m.rateLimitHitsTotal),
-		"token_quota_exceeded_total": atomic.LoadInt64(&m.tokenQuotaExceededTotal),
-		"admission_shed_total":     atomic.LoadInt64(&m.admissionShedTotal),
-		"tokens_input_total":       atomic.LoadInt64(&m.tokensInputTotal),
-		"tokens_output_total":      atomic.LoadInt64(&m.tokensOutputTotal),
-		"requests_by_status":       copyStringIntMap(m.requestsByStatus),
-		"requests_by_method":       copyStringIntMap(m.requestsByMethod),
-		"access_denied_by_user":    copyStringIntMap(m.accessDeniedByUser),
-		"auth_failures_by_reason":  copyStringIntMap(m.authFailuresByReason),
-	}
-}
-
-// Helper functions
-
-func copyStringIntMap(m map[string]int64) map[string]int64 {
-	copy := make(map[string]int64)
-	for k, v := range m {
-		copy[k] = v
-	}
-	return copy
 }
