@@ -192,6 +192,24 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prometheus HTTP SD — returns scrape targets for all running model backends.
+	// No auth required: this is consumed by Prometheus server-side, not by end users.
+	if r.Method == http.MethodGet && r.URL.Path == "/api/v1/prometheus/targets" && gw.modelRouter != nil {
+		gw.servePrometheusTargets(w)
+		return
+	}
+
+	// Per-model metrics proxy: GET /models/{name}/metrics
+	// Forwards to the model backend's own /metrics endpoint (vLLM Prometheus exposition).
+	// No auth required: metrics are non-sensitive operational data consumed by Prometheus.
+	if r.Method == http.MethodGet && gw.modelRouter != nil {
+		if name := extractModelNameFromPath(r.URL.Path); name != "" &&
+			strings.HasSuffix(r.URL.Path, "/metrics") {
+			gw.serveModelMetrics(w, r, name)
+			return
+		}
+	}
+
 	// Extract model name from request if available (needed for access control)
 	modelName := extractModelName(r)
 
@@ -520,6 +538,72 @@ func (gw *Gateway) serveModelList(w http.ResponseWriter, userID string) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(modelList{Object: "list", Data: data})
+}
+
+// servePrometheusTargets writes a Prometheus HTTP SD response listing every
+// running model backend as a scrape target. Prometheus polls this endpoint
+// instead of using a static target list, so new models are scraped automatically
+// without reloading prometheus.yml.
+//
+// Response shape (Prometheus HTTP SD v1):
+//
+//	[{"targets":["localhost:8000"],"labels":{"model":"mistral-7b","job":"model-metrics"}}]
+func (gw *Gateway) servePrometheusTargets(w http.ResponseWriter) {
+	type sdTarget struct {
+		Targets []string          `json:"targets"`
+		Labels  map[string]string `json:"labels"`
+	}
+
+	backends := gw.modelRouter.ListModels()
+	targets := make([]sdTarget, 0, len(backends))
+	for _, b := range backends {
+		if b.Port == 0 {
+			continue // port unknown; skip
+		}
+		targets = append(targets, sdTarget{
+			Targets: []string{fmt.Sprintf("localhost:%d", b.Port)},
+			Labels: map[string]string{
+				"job":   "model-metrics",
+				"model": b.Name,
+			},
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(targets)
+}
+
+// serveModelMetrics reverse-proxies GET /models/{name}/metrics to the model
+// backend's own /metrics endpoint, allowing Prometheus to scrape vLLM metrics
+// through the gateway without exposing model container ports externally.
+func (gw *Gateway) serveModelMetrics(w http.ResponseWriter, r *http.Request, modelName string) {
+	backend, exists := gw.modelRouter.GetBackend(modelName)
+	if !exists {
+		http.Error(w, `{"error":"model not deployed"}`, http.StatusNotFound)
+		return
+	}
+
+	targetURL := backend.URL + "/metrics"
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+	if err != nil {
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		http.Error(w, `{"error":"backend unreachable"}`, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Forward content-type so Prometheus receives valid exposition format.
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
 }
 
 func generateCorrelationID() string {
