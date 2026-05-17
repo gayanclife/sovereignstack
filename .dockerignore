@@ -1,0 +1,32 @@
+# Build outputs
+sovstack
+bin/
+
+# Model cache — can be gigabytes; not needed in the image
+models/
+
+# Runtime state
+logs/
+*.log
+*.db
+
+# Local config overrides
+models.local.yaml
+.env
+
+# Dev / editor noise
+.git/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test artifacts
+tests/
+coverage.out
+*.test
+
+# Docs and non-build files
+docs/
+monitoring/
+scripts/

@@ -91,29 +91,32 @@ sovstack keys grant-model alice "*"
 
 ## 6. Start the services
 
-For a one-host dev setup, run all three subservices via the legacy
-`management` shim plus the gateway:
+The OSS control plane is split into three small services. Run them all
+plus the gateway (each in its own terminal, or use
+`./scripts/start-stack.sh` to launch the whole thing in the background):
 
 ```bash
-# Terminal 1: management API
-sovstack management \
+# Terminal 1: policy — user / quota / access REST API on :8888
+sovstack policy \
   --keys ~/.sovereignstack/keys.json \
   --master-key-file ~/.sovereignstack/master.key
 
-# Terminal 2: gateway
+# Terminal 2: discovery — running-models inventory on :8889
+sovstack discovery
+
+# Terminal 3: metrics-proxy — vLLM /metrics by model name on :8890
+sovstack metrics-proxy
+
+# Terminal 4: gateway — request hot path on :8001
 sovstack gateway \
   --keys ~/.sovereignstack/keys.json \
-  --management-url http://localhost:8888
+  --discovery-url http://localhost:8889
 ```
 
-For the production-shaped split:
-
-```bash
-sovstack policy --master-key-file ~/.sovereignstack/master.key &
-sovstack discovery &
-sovstack metrics-proxy &
-sovstack gateway --keys ~/.sovereignstack/keys.json
-```
+`./scripts/start-stack.sh` is the one-line equivalent: it builds the
+binary, seeds a demo user, starts all four in the background with their
+own log files, and prints a banner with every endpoint plus the demo
+key.
 
 The gateway logs the TLS fingerprint on startup; pin it in your clients
 if you're using the auto-generated self-signed cert.
@@ -182,7 +185,7 @@ Two metric layers, two scrape jobs — see
 | `403 source IP not allowed` | Service-account key with `--ip-allowlist` set; request came from outside the allowed range. |
 | `429 token_quota_exceeded` | User hit their daily or monthly cap. `sovstack keys set-quota <user> --daily 0` removes it. |
 | `502 Bad Gateway` | Model container is down. `docker ps` and `sovstack deploy <model>`. |
-| `connection refused on :8888` | Management service isn't running. Start `sovstack management` (or the split commands). |
+| `connection refused on :8888` | Policy service isn't running. Start `sovstack policy` (and check `discovery` :8889 + `metrics-proxy` :8890 too). |
 | `x509: certificate signed by unknown authority` | Self-signed cert in dev. Use `-k` with curl, or pin the cert fingerprint logged at gateway startup. |
 
 If you're stuck, file a [bug report](https://github.com/sovereignstack/sovereignstack/issues/new?template=bug.yml).

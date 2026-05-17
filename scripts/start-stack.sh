@@ -2,19 +2,20 @@
 
 # SovereignStack OSS — local stack startup
 #
-# Builds the sovstack binary, seeds a demo user, starts the management API
-# and the gateway in the background, waits for both to report healthy, and
-# prints a banner with every endpoint and the demo API key. Ctrl+C tears
-# everything down via the cleanup trap.
+# Builds the sovstack binary, seeds a demo user, then starts all four OSS
+# services (policy, discovery, metrics-proxy, gateway) in the background,
+# waits for each /healthz, and prints a banner with every endpoint plus
+# the demo API key. Ctrl+C tears everything down via the cleanup trap.
 #
 # This is the OSS-only counterpart to the workspace-root start-demo.sh
 # (which adds the commercial visibility backend and Next.js dashboard).
 #
 # Usage:
-#   ./scripts/start-stack.sh                # management + gateway only
+#   ./scripts/start-stack.sh                # all four services
 #   ./scripts/start-stack.sh --with-monitoring  # also bring up prom/grafana via docker-compose
 #   ./scripts/start-stack.sh --skip-build   # reuse existing ./bin/sovstack
 #   ./scripts/start-stack.sh --no-seed      # don't (re-)create the demo user
+#   ./scripts/start-stack.sh --stop         # stop a previous run; exit
 #   ./scripts/start-stack.sh --help
 
 set -e
@@ -31,7 +32,9 @@ DEMO_MODEL_ALLOW="${DEMO_MODEL_ALLOW:-*}"
 DAILY_QUOTA="${DAILY_QUOTA:-500000}"
 MONTHLY_QUOTA="${MONTHLY_QUOTA:-10000000}"
 
-MGMT_PORT="${MANAGEMENT_PORT:-8888}"
+POLICY_PORT="${POLICY_PORT:-8888}"
+DISCOVERY_PORT="${DISCOVERY_PORT:-8889}"
+METRICS_PROXY_PORT="${METRICS_PROXY_PORT:-8890}"
 GW_PORT="${GATEWAY_PORT:-8001}"
 
 ADMIN_KEY="${SOVSTACK_ADMIN_KEY:-sk_admin_$(openssl rand -hex 8 2>/dev/null || echo dev)}"
@@ -58,8 +61,9 @@ show_help() {
   cat <<EOF
 SovereignStack OSS — local stack startup
 
-Brings up the management API and gateway natively (no Docker required for
-the OSS pieces themselves) and prints every endpoint plus a demo API key.
+Brings up policy + discovery + metrics-proxy + gateway natively (no Docker
+required for the OSS pieces themselves) and prints every endpoint plus a
+demo API key.
 
 Usage: $0 [OPTIONS]
 
@@ -74,13 +78,15 @@ Options:
   -h, --help          Show this help
 
 Env overrides (defaults shown):
-  MANAGEMENT_PORT=$MGMT_PORT       Port the management API listens on
+  POLICY_PORT=$POLICY_PORT          Port the policy service listens on
+  DISCOVERY_PORT=$DISCOVERY_PORT    Port the discovery service listens on
+  METRICS_PROXY_PORT=$METRICS_PROXY_PORT  Port the metrics-proxy service listens on
   GATEWAY_PORT=$GW_PORT       Port the gateway listens on
   DEMO_USER=$DEMO_USER       Demo user id (used by sovstack keys add)
   DEMO_MODEL_ALLOW='*'       Models the demo user can access
   DAILY_QUOTA=$DAILY_QUOTA      Demo user daily token quota
   MONTHLY_QUOTA=$MONTHLY_QUOTA   Demo user monthly token quota
-  SOVSTACK_ADMIN_KEY         Admin Bearer for management API; auto-generated if unset
+  SOVSTACK_ADMIN_KEY         Admin Bearer for the policy service; auto-generated if unset
 
 Press Ctrl+C to stop everything.
 EOF
@@ -98,10 +104,6 @@ for arg in "$@"; do
 done
 
 # ─── --stop: terminate previously-started services and exit ───────────────────
-# We read .stack-pids written by a prior run of this script. SIGTERM first
-# (graceful), then SIGKILL after a short window for stragglers. This is the
-# explicit counterpart to the cleanup trap that fires when the script is
-# run in the foreground and you Ctrl+C it.
 if [ "$STOP_ONLY" = true ]; then
   if [ ! -f "$PIDS_FILE" ]; then
     echo "[stack] no $PIDS_FILE — nothing to stop"
@@ -118,7 +120,6 @@ if [ "$STOP_ONLY" = true ]; then
       printf "\033[1;33m[stack]\033[0m %s (pid %s) was not running\n" "$name" "$pid"
     fi
   done < "$PIDS_FILE"
-  # Give graceful shutdown a moment, then escalate.
   sleep 2
   while read -r pid name; do
     [ -z "${pid:-}" ] && continue
@@ -133,10 +134,6 @@ if [ "$STOP_ONLY" = true ]; then
 fi
 
 # ─── Cleanup trap ─────────────────────────────────────────────────────────────
-# Two-tier teardown: kill recorded PIDs first (clean), then escalate to a
-# SIGTERM-then-SIGKILL of the whole process group as a safety net so we
-# never leak a sovstack process when SIGINT propagation is flaky (e.g. when
-# the script is invoked from a non-interactive shell or via `& kill -INT`).
 cleanup() {
   echo ""
   log "shutting down"
@@ -149,7 +146,6 @@ cleanup() {
   if [ "$WITH_MONITORING" = true ]; then
     ( cd "$PROJECT_ROOT" && docker compose stop prometheus grafana node-exporter cadvisor 2>/dev/null || true )
   fi
-  # Wait briefly for graceful shutdown, then escalate.
   sleep 1
   pkill -TERM -P $$ 2>/dev/null || true
   sleep 1
@@ -172,13 +168,15 @@ check_port_free() {
     warn "port $port ($name) is already in use"
     echo "  Likely culprits:"
     echo "    docker ps               # is a sovereignstack-* container holding it?"
-    echo "    docker compose stop management gateway"
+    echo "    docker compose stop policy discovery metrics-proxy gateway"
     echo "    lsof -iTCP:$port -sTCP:LISTEN"
-    die "free port $port and re-run, or override with ${name^^}_PORT=<port>"
+    die "free port $port and re-run, or override with the env var"
   fi
 }
-check_port_free "$MGMT_PORT" management
-check_port_free "$GW_PORT"   gateway
+check_port_free "$POLICY_PORT"        policy
+check_port_free "$DISCOVERY_PORT"     discovery
+check_port_free "$METRICS_PROXY_PORT" metrics-proxy
+check_port_free "$GW_PORT"            gateway
 
 mkdir -p "$LOG_DIR" "$(dirname "$KEYS_FILE")" "$PROJECT_ROOT/bin"
 : > "$PIDS_FILE"
@@ -198,8 +196,6 @@ if [ "$SKIP_SEED" = true ]; then
   log "skipping demo user seed (--no-seed)"
 else
   log "seeding demo user '$DEMO_USER'"
-  # Best-effort cleanup of a previous demo user; failures are silent because
-  # the keystore may not exist yet on a fresh install.
   "$BIN" keys remove "$DEMO_USER" >/dev/null 2>&1 || true
   ADD_OUT="$("$BIN" keys add "$DEMO_USER" --department demo --team demo --role analyst 2>&1)"
   echo "$ADD_OUT" | grep -E '^\s*(API Key|User ID):' || true
@@ -213,26 +209,31 @@ else
   ok "demo user ready"
 fi
 
-# ─── 3. Start management ──────────────────────────────────────────────────────
-log "starting management on :$MGMT_PORT → $LOG_DIR/management.log"
-SOVSTACK_INSECURE_HTTP=true \
-"$BIN" management \
-    --port "$MGMT_PORT" \
-    --keys "$KEYS_FILE" \
-    --admin-key "$ADMIN_KEY" \
-    >"$LOG_DIR/management.log" 2>&1 &
-MGMT_PID=$!
-echo "$MGMT_PID management" >> "$PIDS_FILE"
+# ─── 3. Start the three management-side services ──────────────────────────────
+# Helper: launch a subcommand in the background, append PID to the file,
+# wait for /healthz, log to its own file. Each service stays in its own
+# process so a crash of one doesn't take the others down.
+start_svc() {
+  local name="$1" port="$2"; shift 2
+  log "starting $name on :$port → $LOG_DIR/$name.log"
+  SOVSTACK_INSECURE_HTTP=true \
+  "$BIN" "$name" --port "$port" "$@" \
+      >"$LOG_DIR/$name.log" 2>&1 &
+  local pid=$!
+  echo "$pid $name" >> "$PIDS_FILE"
+  for _ in $(seq 1 30); do
+    if curl -sf "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; then
+      ok "$name ready (pid $pid)"
+      return 0
+    fi
+    sleep 0.5
+  done
+  die "$name did not come up on :$port — see $LOG_DIR/$name.log"
+}
 
-for _ in $(seq 1 30); do
-  if curl -sf "http://127.0.0.1:$MGMT_PORT/healthz" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 0.5
-done
-curl -sf "http://127.0.0.1:$MGMT_PORT/healthz" >/dev/null 2>&1 \
-  || die "management did not come up on :$MGMT_PORT — see $LOG_DIR/management.log"
-ok "management ready (pid $MGMT_PID)"
+start_svc policy        "$POLICY_PORT"        --keys "$KEYS_FILE" --admin-key "$ADMIN_KEY"
+start_svc discovery     "$DISCOVERY_PORT"
+start_svc metrics-proxy "$METRICS_PROXY_PORT"
 
 # ─── 4. Start gateway ─────────────────────────────────────────────────────────
 log "starting gateway on :$GW_PORT → $LOG_DIR/gateway.log"
@@ -240,7 +241,7 @@ SOVSTACK_INSECURE_HTTP=true \
 "$BIN" gateway \
     --port "$GW_PORT" \
     --keys "$KEYS_FILE" \
-    --management-url "http://127.0.0.1:$MGMT_PORT" \
+    --discovery-url "http://127.0.0.1:$DISCOVERY_PORT" \
     --rate-limit 100 \
     >"$LOG_DIR/gateway.log" 2>&1 &
 GW_PID=$!
@@ -271,23 +272,28 @@ cat <<EOF
 ──────────────────────────────────────────────────────────────────────
 
   Gateway              http://localhost:$GW_PORT
-    /healthz             liveness probe (200 if process is up)
-    /readyz              readiness probe (200 if upstreams are reachable)
-    /metrics             Prometheus exposition (request / latency / quota counters)
+    /healthz             liveness probe
+    /readyz              readiness probe (checks discovery reachable)
+    /metrics             Prometheus exposition (gateway-level counters)
     /v1/...              OpenAI-compatible proxy (POST chat / completions)
     /api/v1/audit/logs   recent audit records (admin)
     /api/v1/audit/stats  audit summary
 
-  Management API       http://localhost:$MGMT_PORT
-    /healthz             liveness probe
-    /readyz              readiness probe
-    /api/v1/models/running                         list running model containers
-    /api/v1/models/{name}/metrics                  proxied vLLM /metrics
+  Policy               http://localhost:$POLICY_PORT
+    /healthz, /readyz                              liveness, readiness
     /api/v1/users                                  list users (admin)
     /api/v1/users/{id}                             single user
     /api/v1/users/{id}/models/{model}              grant/revoke (POST/DELETE, admin)
     /api/v1/users/{id}/quota                       update quota (PATCH, admin)
     /api/v1/access/check?user=...&model=...        pre-flight access check
+
+  Discovery            http://localhost:$DISCOVERY_PORT
+    /healthz, /readyz                              liveness, readiness
+    /api/v1/models/running                         inventory of running models
+
+  Metrics-proxy        http://localhost:$METRICS_PROXY_PORT
+    /healthz, /readyz                              liveness, readiness
+    /api/v1/models/{name}/metrics                  proxied vLLM Prometheus metrics
 EOF
 
 if [ "$WITH_MONITORING" = true ]; then
@@ -312,7 +318,7 @@ fi
 
 cat <<EOF
 
-  Logs                   $LOG_DIR/{management,gateway}.log
+  Logs                   $LOG_DIR/{policy,discovery,metrics-proxy,gateway}.log
 
   Try it:
 EOF
@@ -339,7 +345,7 @@ EOF
 else
 cat <<EOF
     curl -s http://localhost:$GW_PORT/healthz
-    curl -s http://localhost:$MGMT_PORT/api/v1/models/running | jq .
+    curl -s http://localhost:$DISCOVERY_PORT/api/v1/models/running | jq .
 EOF
 fi
 

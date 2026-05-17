@@ -4,9 +4,9 @@ Helper scripts for running the SovereignStack OSS stack locally.
 
 | Script | What it does | When to use |
 |---|---|---|
-| `start-stack.sh` | Native (no-Docker) full OSS startup: builds, seeds a demo user, runs management + gateway, prints every endpoint and the demo key. Supports `--stop` to terminate a previous run. | Day-to-day local development with a Go toolchain installed |
-| `start-stack-docker.sh` | Same as above but runs both services in containers via `docker-compose.yml`. Supports `--stop` (preserve state) and `--down` (remove containers). | When you don't want a Go toolchain on the host, or want to mirror a production-like container environment |
-| `admission-smoke.sh` | Deterministic 503 demo for the host-aware admission controller (fake mgmt + curl) | Verifying admission guardrails after changes (no GPU needed) |
+| `start-stack.sh` | Native (no-Docker) full OSS startup: builds, seeds a demo user, runs the four OSS services (`policy`, `discovery`, `metrics-proxy`, `gateway`), prints every endpoint and the demo key. Supports `--stop` to terminate a previous run. | Day-to-day local development with a Go toolchain installed |
+| `start-stack-docker.sh` | Same as above but runs all four services in containers via `docker-compose.yml`. Supports `--stop` (preserve state) and `--down` (remove containers). | When you don't want a Go toolchain on the host, or want to mirror a production-like container environment |
+| `admission-smoke.sh` | Deterministic 503 demo for the host-aware admission controller (fake discovery + metrics + curl) | Verifying admission guardrails after changes (no GPU needed) |
 
 For the **full commercial stack** (OSS + visibility backend + Next.js dashboard) use `../start-demo.sh` at the workspace root.
 
@@ -14,14 +14,14 @@ For the **full commercial stack** (OSS + visibility backend + Next.js dashboard)
 
 ## start-stack.sh
 
-**Purpose:** Native local startup of the full OSS stack — builds `sovstack`, seeds a demo user with `*` model access and configurable token quota, starts the management API and the gateway in the background, waits for both `/healthz` probes, and prints a banner with every endpoint plus the demo + admin keys. Ctrl+C tears everything down via the cleanup trap.
+**Purpose:** Native local startup of the full OSS stack — builds `sovstack`, seeds a demo user with `*` model access and configurable token quota, starts the four services (`policy`, `discovery`, `metrics-proxy`, `gateway`) in the background, waits for each `/healthz` probe, and prints a banner with every endpoint plus the demo + admin keys. Ctrl+C tears everything down via the cleanup trap.
 
 This is the OSS-only counterpart to the workspace-root `start-demo.sh` (which adds the commercial visibility backend and Next.js dashboard).
 
 **Usage:**
 
 ```bash
-# Standard: management + gateway, no monitoring
+# Standard: all four services, no monitoring
 ./scripts/start-stack.sh
 
 # Also bring up Prometheus + Grafana via docker-compose
@@ -58,11 +58,16 @@ The script writes `.stack-pids` when it starts services in the background; `--st
     /v1/...              OpenAI-compatible proxy
     /api/v1/audit/logs   recent audit records
 
-  Management API       http://localhost:8888
-    /api/v1/models/running          list running model containers
-    /api/v1/models/{name}/metrics   proxied vLLM /metrics
-    /api/v1/users                   list users (admin)
-    /api/v1/access/check            pre-flight access check
+  Policy               http://localhost:8888
+    /api/v1/users                  list users (admin)
+    /api/v1/users/{id}/quota       update quota (PATCH, admin)
+    /api/v1/access/check           pre-flight access check
+
+  Discovery            http://localhost:8889
+    /api/v1/models/running         inventory of running models
+
+  Metrics-proxy        http://localhost:8890
+    /api/v1/models/{name}/metrics  proxied vLLM Prometheus metrics
 
   Demo user              demo
   Demo API key           sk_…
@@ -77,18 +82,18 @@ The script writes `.stack-pids` when it starts services in the background; `--st
   Press Ctrl+C to stop.
 ```
 
-The script detects port conflicts on `8001` and `8888` up-front so it fails fast with a helpful pointer (e.g. "is a `sovereignstack-*` container holding it?") instead of dying inside `bind: address already in use`. Logs go to `logs/management.log` and `logs/gateway.log`.
+The script detects port conflicts on `8001`, `8888`, `8889`, and `8890` up-front so it fails fast with a helpful pointer (e.g. "is a `sovereignstack-*` container holding it?") instead of dying inside `bind: address already in use`. Logs go to `logs/{policy,discovery,metrics-proxy,gateway}.log`.
 
 ---
 
 ## start-stack-docker.sh
 
-**Purpose:** Container-mode counterpart to `start-stack.sh`. Brings up management + gateway in containers via `docker-compose.yml`, optionally adds Prometheus / Grafana, seeds the demo user inside the management container so its API key works through the gateway, and prints the same endpoint banner. Useful when you don't want a Go toolchain on the host or you want to mirror a production-like container layout.
+**Purpose:** Container-mode counterpart to `start-stack.sh`. Brings up all four OSS services (`policy`, `discovery`, `metrics-proxy`, `gateway`) in containers via `docker-compose.yml`, optionally adds Prometheus / Grafana, seeds the demo user inside the policy container so its API key works through the gateway, and prints the same endpoint banner. Useful when you don't want a Go toolchain on the host or you want to mirror a production-like container layout.
 
 **Usage:**
 
 ```bash
-# Standard: management + gateway in containers
+# Standard: all four services in containers
 ./scripts/start-stack-docker.sh
 
 # Also bring up Prometheus + Grafana
@@ -112,7 +117,7 @@ The script detects port conflicts on `8001` and `8888` up-front so it fails fast
 
 The wrapper waits for each container's `HEALTHCHECK` to report `healthy` before seeding the demo user (Docker reports per-container health via `docker compose ps --format json`, polled until ready or 30s timeout).
 
-**`.env` is auto-managed.** On every run the script writes `USER_UID` / `USER_GID` / `DOCKER_GID` to `.env` (already gitignored), so direct `docker compose ...` invocations without going through this script also pick up the right host UIDs and the correct docker socket group. Without it, `docker compose up -d` from a fresh shell silently uses 1000:1000 + DOCKER_GID=999 and management loses access to the docker daemon.
+**`.env` is auto-managed.** On every run the script writes `USER_UID` / `USER_GID` / `DOCKER_GID` to `.env` (already gitignored), so direct `docker compose ...` invocations without going through this script also pick up the right host UIDs and the correct docker socket group. Without it, `docker compose up -d` from a fresh shell silently uses 1000:1000 + DOCKER_GID=999 and `discovery` / `metrics-proxy` lose access to the docker daemon.
 
 **Why two scripts and not one with a flag?** Day-to-day flow is short enough that one file per mode is easier to read top-to-bottom than a single script with branching for native vs container plumbing. Both share the demo-user defaults (`DEMO_USER`, `DAILY_QUOTA`, etc.) and the banner shape, so switching between them is muscle-memory.
 

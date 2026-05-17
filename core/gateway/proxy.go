@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -107,12 +108,16 @@ func (gw *Gateway) director(req *http.Request) {
 	if gw.modelRouter != nil {
 		modelName := extractModelNameFromPath(req.URL.Path)
 		if modelName != "" {
+			// Strip unconditionally: /models/{name} is a gateway routing
+			// directive that no backend understands. Do this before the
+			// registry lookup so the path is clean even on a cache miss
+			// (e.g. a concurrent registry refresh removed the model between
+			// the ServeHTTP capability check and this director call).
+			req.URL.Path = stripModelPrefixFromPath(req.URL.Path, modelName)
+			req.URL.RawPath = "" // clear stale hint so EscapedPath uses the new Path
 			if backend, exists := gw.modelRouter.GetBackend(modelName); exists {
-				// Route to model-specific backend
 				u, _ := url.Parse(backend.URL)
 				targetURL = u
-				// Strip the /models/{model-name} prefix from the path
-				req.URL.Path = stripModelPrefixFromPath(req.URL.Path, modelName)
 			}
 		}
 	}
@@ -280,6 +285,17 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 						http.StatusNotFound)
 					return
 				}
+			} else {
+				// Path has /models/{name}/... prefix but the named model isn't in
+				// the registry. Reject here instead of forwarding the unstripped
+				// path to the default backend, which would receive a path vLLM
+				// doesn't understand and return a confusing bare 404.
+				gw.auditLogger.LogError(userID, r.RequestURI, correlationID,
+					fmt.Sprintf("model %q not deployed", routedName), http.StatusNotFound, clientIP)
+				http.Error(w,
+					fmt.Sprintf(`{"error":"model_not_deployed","model":%q}`, routedName),
+					http.StatusNotFound)
+				return
 			}
 		}
 	}
@@ -310,16 +326,26 @@ func (gw *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Calculate request duration
 	duration := time.Since(startTime).Milliseconds()
 
+	// Parse token usage from response body (works for both JSON and SSE streaming).
+	inputTokens, outputTokens := parseTokenUsage(wrappedWriter.body, wrappedWriter.Header().Get("Content-Type"))
+
 	// Record metrics (Phase 4)
 	if gw.Metrics != nil {
 		gw.Metrics.RecordRequestComplete(wrappedWriter.statusCode, r.Method, userID, modelName)
 		gw.Metrics.RecordLatency(modelName, duration)
-		// Note: Token recording would require parsing response body, handled separately if needed
+		if inputTokens > 0 || outputTokens > 0 {
+			gw.Metrics.RecordTokens(userID, modelName, inputTokens, outputTokens)
+		}
+	}
+
+	// Record quota usage against actual token counts.
+	if gw.quotaManager != nil && (inputTokens > 0 || outputTokens > 0) {
+		gw.quotaManager.Record(userID, inputTokens, outputTokens)
 	}
 
 	// Log response
 	if wrappedWriter.statusCode < 400 {
-		gw.auditLogger.LogResponse(userID, modelName, r.RequestURI, correlationID, wrappedWriter.statusCode, int64(len(wrappedWriter.body)), 0, 0, duration)
+		gw.auditLogger.LogResponse(userID, modelName, r.RequestURI, correlationID, wrappedWriter.statusCode, int64(len(wrappedWriter.body)), int(inputTokens), int(outputTokens), duration)
 	} else {
 		gw.auditLogger.LogError(userID, r.RequestURI, correlationID, fmt.Sprintf("backend returned %d", wrappedWriter.statusCode), wrappedWriter.statusCode, clientIP)
 	}
@@ -444,30 +470,50 @@ func generateCorrelationID() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().Nanosecond())
 }
 
-// extractModelNameFromPath extracts model name from paths like /models/{model-name}/v1/...
-// Used for Phase 3 multi-model routing
+// extractModelNameFromPath extracts the model name from paths that embed it
+// for routing purposes. Handles both formats:
+//
+//	/models/{name}/v1/...      (SovereignStack native)
+//	/v1/models/{name}/...      (OpenAI-style prefix)
+//
+// At least one path component must follow the model name so that the
+// /v1/models listing endpoint (no name, no trailing path) is not mistaken
+// for a routing directive.
 func extractModelNameFromPath(path string) string {
 	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	if len(parts) > 1 && parts[0] == "models" {
-		// Return the model name (next part after "models")
-		return parts[1]
+	for i, part := range parts {
+		if part == "models" && i+2 < len(parts) && parts[i+1] != "" {
+			return parts[i+1]
+		}
 	}
 	return ""
 }
 
-// stripModelPrefixFromPath removes the /models/{model-name} prefix from a path
-// e.g., /models/mistral-7b/v1/chat/completions → /v1/chat/completions
+// stripModelPrefixFromPath removes the /models/{model-name} segment from
+// wherever it appears in the path, joining the surrounding components.
+//
+//	/models/mistral-7b/v1/chat/completions  → /v1/chat/completions
+//	/v1/models/mistral-7b/chat/completions  → /v1/chat/completions
 func stripModelPrefixFromPath(path, modelName string) string {
-	prefix := "/models/" + modelName
-	if strings.HasPrefix(path, prefix) {
-		// Return path without the prefix, ensuring it starts with /
-		remainder := strings.TrimPrefix(path, prefix)
-		if !strings.HasPrefix(remainder, "/") {
-			remainder = "/" + remainder
-		}
-		return remainder
+	segment := "/models/" + modelName
+	idx := strings.Index(path, segment)
+	if idx < 0 {
+		return path
 	}
-	return path
+	end := idx + len(segment)
+	// Verify the model name ends at a path boundary to avoid partial matches
+	// (e.g., model "llama" must not strip from a path containing "llama-3-8b").
+	if end < len(path) && path[end] != '/' {
+		return path
+	}
+	result := path[:idx] + path[end:]
+	if result == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(result, "/") {
+		result = "/" + result
+	}
+	return result
 }
 
 func min(a, b int) int {
@@ -501,4 +547,49 @@ func jsonStringArray(items []string) string {
 	}
 	b.WriteByte(']')
 	return b.String()
+}
+
+// parseTokenUsage extracts prompt_tokens and completion_tokens from a backend
+// response. It handles both plain JSON (non-streaming) and SSE streaming
+// responses (text/event-stream), where usage appears in the last data chunk.
+func parseTokenUsage(body []byte, contentType string) (inputTokens, outputTokens int64) {
+	type usagePayload struct {
+		Usage struct {
+			PromptTokens     int64 `json:"prompt_tokens"`
+			CompletionTokens int64 `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+
+	tryParse := func(b []byte) (int64, int64, bool) {
+		var p usagePayload
+		if err := json.Unmarshal(b, &p); err != nil {
+			return 0, 0, false
+		}
+		if p.Usage.PromptTokens == 0 && p.Usage.CompletionTokens == 0 {
+			return 0, 0, false
+		}
+		return p.Usage.PromptTokens, p.Usage.CompletionTokens, true
+	}
+
+	if strings.Contains(contentType, "text/event-stream") {
+		// Scan SSE lines in reverse to find the last chunk with usage.
+		lines := bytes.Split(body, []byte("\n"))
+		for i := len(lines) - 1; i >= 0; i-- {
+			line := bytes.TrimSpace(lines[i])
+			if !bytes.HasPrefix(line, []byte("data:")) {
+				continue
+			}
+			payload := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+			if bytes.Equal(payload, []byte("[DONE]")) {
+				continue
+			}
+			if in, out, ok := tryParse(payload); ok {
+				return in, out
+			}
+		}
+		return 0, 0
+	}
+
+	in, out, _ := tryParse(body)
+	return in, out
 }

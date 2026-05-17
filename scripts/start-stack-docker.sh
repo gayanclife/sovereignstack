@@ -2,16 +2,17 @@
 
 # SovereignStack OSS — full stack as containers (docker compose)
 #
-# Brings up management + gateway in containers via the workspace
-# docker-compose.yml, optionally adds the monitoring stack, seeds a demo
-# user inside the management container so its API key is usable through
-# the gateway, and prints a banner with every endpoint.
+# Brings up all four OSS services in containers via the workspace
+# docker-compose.yml: policy (8888), discovery (8889), metrics-proxy (8890),
+# and gateway (8001). Optionally adds the monitoring stack. Seeds a demo
+# user inside the policy container so its API key is usable through the
+# gateway. Prints a banner with every endpoint.
 #
 # This is the container-mode counterpart to scripts/start-stack.sh
 # (which runs the same services natively without Docker).
 #
 # Usage:
-#   ./scripts/start-stack-docker.sh                 # management + gateway
+#   ./scripts/start-stack-docker.sh                 # all four services
 #   ./scripts/start-stack-docker.sh --with-monitoring   # also Prometheus + Grafana
 #   ./scripts/start-stack-docker.sh --no-seed       # don't (re-)create the demo user
 #   ./scripts/start-stack-docker.sh --build         # force docker image rebuild
@@ -24,7 +25,11 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-CORE_SERVICES=("management" "gateway")
+# Order matters: policy first (so we can seed before gateway loads keys.json),
+# then discovery (gateway depends on it for the running-models registry),
+# then metrics-proxy, then gateway.
+MGMT_SERVICES=("policy" "discovery" "metrics-proxy")
+ALL_SERVICES=("policy" "discovery" "metrics-proxy" "gateway")
 MONITOR_SERVICES=("prometheus" "grafana" "node-exporter" "cadvisor")
 
 DEMO_USER="${DEMO_USER:-demo}"
@@ -45,7 +50,7 @@ warn() { printf "${YELLOW}[warn]${NC} %s\n" "$*"; }
 die()  { printf "${RED}[fail]${NC} %s\n" "$*"; exit 1; }
 
 show_help() {
-  sed -n '3,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '3,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ─── Args ─────────────────────────────────────────────────────────────────────
@@ -69,8 +74,8 @@ docker compose version >/dev/null 2>&1 || die "docker compose plugin required (t
 
 # ─── --stop / --down: tear down without bringing anything up ─────────────────
 if [ "$ACTION" = "stop" ]; then
-  log "stopping core services (state preserved)"
-  docker compose stop "${CORE_SERVICES[@]}" 2>&1 | sed 's/^/  /'
+  log "stopping all OSS services (state preserved)"
+  docker compose stop "${ALL_SERVICES[@]}" 2>&1 | sed 's/^/  /'
   if [ "$WITH_MONITORING" = true ]; then
     docker compose stop "${MONITOR_SERVICES[@]}" 2>&1 | sed 's/^/  /'
   fi
@@ -88,14 +93,16 @@ fi
 # ─── Bring services up ────────────────────────────────────────────────────────
 if [ "$FORCE_BUILD" = true ]; then
   log "rebuilding sovereignstack image (--build)"
-  docker compose build management 2>&1 | tail -5 | sed 's/^/  /'
+  # Only the policy service has a `build:` section in docker-compose.yml;
+  # the other three reuse the same `sovereignstack:latest` image.
+  COMPOSE_BAKE=false docker compose build policy
 fi
 
 # Run containers as the host user so files written into the bind-mounted
 # ~/.sovereignstack (keys.json, audit DB) end up host-owned, not root.
-# Management still needs read access to /var/run/docker.sock; pass through
-# the host's docker group GID so it can talk to the daemon as a non-root
-# user. Falls back gracefully if docker group doesn't exist on this host.
+# Discovery + metrics-proxy still need read access to /var/run/docker.sock;
+# pass through the host's docker group GID so they can talk to the daemon
+# as a non-root user. Falls back gracefully if docker group doesn't exist.
 export USER_UID="$(id -u)"
 export USER_GID="$(id -g)"
 DOCKER_GID="$(getent group docker 2>/dev/null | cut -d: -f3)"
@@ -104,10 +111,6 @@ export DOCKER_GID="${DOCKER_GID:-${USER_GID}}"
 # Persist the values into .env so subsequent direct `docker compose ...`
 # invocations (without going through this script) pick up the same
 # host-specific UIDs/GIDs instead of the conservative compose defaults.
-# Without this, `docker compose up -d --force-recreate management` from
-# a fresh shell silently uses 1000:1000 + DOCKER_GID=999 and management
-# loses its docker socket access — empty registry, every routed request
-# falls through to the default backend.
 ENV_FILE="$PROJECT_ROOT/.env"
 if [ ! -f "$ENV_FILE" ] || ! grep -q '^USER_UID=' "$ENV_FILE" 2>/dev/null; then
   {
@@ -132,8 +135,8 @@ else
 fi
 
 # Detect a stale root-owned keystore from a prior compose run that
-# predated this fix; the host can't read it, and seeding will fail
-# inside the now-non-root container too. Surface a clean recovery.
+# predated the host-user fix; the host can't read it, and seeding will
+# fail inside the now-non-root container too. Surface a clean recovery.
 KEYS_FILE="$HOME/.sovereignstack/keys.json"
 if [ -f "$KEYS_FILE" ] && [ ! -r "$KEYS_FILE" ]; then
   warn "$KEYS_FILE is not readable by you (likely root-owned from a prior compose run)"
@@ -143,15 +146,18 @@ if [ -f "$KEYS_FILE" ] && [ ! -r "$KEYS_FILE" ]; then
   die "stale keystore ownership — recover and retry"
 fi
 
-# Step 1 — bring up management ALONE so we can seed the demo user before
-# the gateway starts. The gateway loads keys.json once at startup; if we
-# seed after, it never sees the new user.
-log "starting management (alone — gateway joins after demo seed)"
-docker compose up -d management 2>&1 | tail -5 | sed 's/^/  /'
+# Step 1 — bring up the three management-side services (policy, discovery,
+# metrics-proxy) FIRST so we can seed the demo user via the policy
+# container before the gateway loads keys.json. Order matters: the
+# gateway loads keys.json once at startup, so any user we add after the
+# gateway starts is invisible to it.
+log "starting management-side services: ${MGMT_SERVICES[*]}"
+docker compose up -d "${MGMT_SERVICES[@]}"
 
 wait_healthy() {
   local svc="$1" tries=30
   local state=""
+  printf "${BLUE}[docker-stack]${NC} waiting for %s to be healthy " "$svc"
   while [ "$tries" -gt 0 ]; do
     state="$(docker compose ps --format json "$svc" 2>/dev/null \
              | python3 -c 'import sys,json
@@ -161,34 +167,40 @@ try:
 except Exception:
     print("unknown")' 2>/dev/null)"
     if [ "$state" = "healthy" ]; then
+      printf " done\n"
       ok "$svc healthy"
       return 0
     fi
+    printf "."
     tries=$((tries-1))
     sleep 1
   done
+  printf "\n"
   warn "$svc not healthy after 30s — continuing; check 'docker compose logs $svc'"
   return 1
 }
-wait_healthy management
+for svc in "${MGMT_SERVICES[@]}"; do
+  wait_healthy "$svc"
+done
 
 # Step 2 — seed the demo user (so the gateway sees it on first load).
+# Policy is the service that owns keys.json, so seed via that container.
 DEMO_KEY=""
 if [ "$SKIP_SEED" = true ]; then
   log "skipping demo user seed (--no-seed)"
 else
-  log "seeding demo user '$DEMO_USER' inside the management container"
-  docker compose exec -T management /app/sovstack keys remove "$DEMO_USER" >/dev/null 2>&1 || true
-  ADD_OUT="$(docker compose exec -T management /app/sovstack keys add "$DEMO_USER" \
+  log "seeding demo user '$DEMO_USER' inside the policy container"
+  docker compose exec -T policy /app/sovstack keys remove "$DEMO_USER" >/dev/null 2>&1 || true
+  ADD_OUT="$(docker compose exec -T policy /app/sovstack keys add "$DEMO_USER" \
                 --department demo --team demo --role analyst 2>&1 || true)"
   echo "$ADD_OUT" | grep -E '^\s*(API Key|User ID):' || true
   DEMO_KEY="$(echo "$ADD_OUT" | awk '/API Key:/ {print $3; exit}')"
   if [ -z "$DEMO_KEY" ]; then
-    warn "could not capture demo key; check 'docker compose logs management'"
+    warn "could not capture demo key; check 'docker compose logs policy'"
   fi
-  docker compose exec -T management /app/sovstack keys grant-model "$DEMO_USER" "$DEMO_MODEL_ALLOW" >/dev/null 2>&1 \
+  docker compose exec -T policy /app/sovstack keys grant-model "$DEMO_USER" "$DEMO_MODEL_ALLOW" >/dev/null 2>&1 \
     || warn "grant-model failed (model whitelist may be empty)"
-  docker compose exec -T management /app/sovstack keys set-quota "$DEMO_USER" \
+  docker compose exec -T policy /app/sovstack keys set-quota "$DEMO_USER" \
       --daily "$DAILY_QUOTA" --monthly "$MONTHLY_QUOTA" >/dev/null 2>&1 \
     || warn "set-quota failed"
   ok "demo user ready"
@@ -201,7 +213,7 @@ if [ "$WITH_MONITORING" = true ]; then
   SERVICES+=("${MONITOR_SERVICES[@]}")
 fi
 log "starting ${SERVICES[*]}"
-docker compose up -d "${SERVICES[@]}" 2>&1 | tail -5 | sed 's/^/  /'
+docker compose up -d "${SERVICES[@]}"
 wait_healthy gateway
 
 # ─── Banner ───────────────────────────────────────────────────────────────────
@@ -213,17 +225,21 @@ cat <<EOF
 
   Gateway              http://localhost:8001
     /healthz             liveness probe
-    /readyz              readiness probe
+    /readyz              readiness probe (checks discovery reachable)
     /metrics             Prometheus exposition
     /v1/...              OpenAI-compatible proxy
     /api/v1/audit/logs   recent audit records (admin)
 
-  Management API       http://localhost:8888
-    /healthz             liveness probe
-    /api/v1/models/running          list running model containers
-    /api/v1/models/{name}/metrics   proxied vLLM /metrics
+  Policy               http://localhost:8888
     /api/v1/users                   list users (admin)
+    /api/v1/users/{id}/quota        update quota (PATCH, admin)
     /api/v1/access/check            pre-flight access check
+
+  Discovery            http://localhost:8889
+    /api/v1/models/running          inventory of running model containers
+
+  Metrics-proxy        http://localhost:8890
+    /api/v1/models/{name}/metrics   proxied vLLM Prometheus metrics
 EOF
 
 if [ "$WITH_MONITORING" = true ]; then
@@ -248,7 +264,7 @@ fi
 cat <<EOF
 
   Containers             docker compose ps
-  Logs                   docker compose logs -f management gateway
+  Logs                   docker compose logs -f policy discovery metrics-proxy gateway
   Stop (preserve state)  ./scripts/start-stack-docker.sh --stop
   Tear down completely   ./scripts/start-stack-docker.sh --down
 

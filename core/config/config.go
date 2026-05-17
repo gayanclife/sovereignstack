@@ -28,7 +28,7 @@ import (
 type Config struct {
 	Log        LogConfig        `yaml:"log"`
 	Gateway    GatewayConfig    `yaml:"gateway"`
-	Management ManagementConfig `yaml:"management"`
+	Policy     PolicyConfig     `yaml:"policy"`
 	Visibility VisibilityConfig `yaml:"visibility"`
 	CORS       CORSConfig       `yaml:"cors"`
 	TLS        TLSConfig        `yaml:"tls"`
@@ -46,7 +46,11 @@ type GatewayConfig struct {
 	RateLimit     float64     `yaml:"rate_limit"     env:"SOVSTACK_GATEWAY_RATE_LIMIT"`
 	APIKeyHeader  string      `yaml:"api_key_header" env:"SOVSTACK_GATEWAY_API_KEY_HEADER"`
 	Backend       string      `yaml:"backend"        env:"SOVSTACK_GATEWAY_BACKEND"`
-	ManagementURL string      `yaml:"management_url" env:"SOVSTACK_GATEWAY_MANAGEMENT_URL"`
+	// DiscoveryURL is the URL of the discovery service that lists running
+	// model containers. The gateway polls /api/v1/models/running on this
+	// URL to keep its routing table fresh. Default: http://localhost:8889
+	// (the discovery subcommand's default port).
+	DiscoveryURL  string      `yaml:"discovery_url"  env:"SOVSTACK_GATEWAY_DISCOVERY_URL"`
 	KeysFile      string      `yaml:"keys_file"      env:"SOVSTACK_KEYS_FILE"`
 	AuditDB       string      `yaml:"audit_db"       env:"SOVSTACK_AUDIT_DB"`
 	Audit         AuditConfig `yaml:"audit"`
@@ -141,9 +145,12 @@ type QuotaRedisConfig struct {
 	KeyPrefix string `yaml:"key_prefix" env:"SOVSTACK_QUOTA_REDIS_KEY_PREFIX"`
 }
 
-// ManagementConfig holds settings specific to the management service.
-type ManagementConfig struct {
-	Port     int    `yaml:"port"      env:"SOVSTACK_MANAGEMENT_PORT"`
+// PolicyConfig holds settings specific to the policy service (the
+// user/quota/access REST API on port 8888). Renamed from
+// ManagementConfig when the unified `sovstack management` shim was
+// removed; the YAML key is now `policy:` to match the subcommand name.
+type PolicyConfig struct {
+	Port     int    `yaml:"port"      env:"SOVSTACK_POLICY_PORT"`
 	KeysFile string `yaml:"keys_file" env:"SOVSTACK_KEYS_FILE"`
 	AdminKey string `yaml:"admin_key" env:"SOVSTACK_ADMIN_KEY"`
 
@@ -215,7 +222,7 @@ func Defaults() *Config {
 			RateLimit:     100,
 			APIKeyHeader:  "X-API-Key",
 			Backend:       "http://localhost:8000",
-			ManagementURL: "http://localhost:8888",
+			DiscoveryURL:  "http://localhost:8889",
 			KeysFile:      "",
 			AuditDB:       "./sovstack-audit.db",
 			Quota: QuotaConfig{
@@ -238,7 +245,7 @@ func Defaults() *Config {
 				CalmSeconds:     300,
 			},
 		},
-		Management: ManagementConfig{
+		Policy: PolicyConfig{
 			Port: 8888,
 		},
 		Visibility: VisibilityConfig{

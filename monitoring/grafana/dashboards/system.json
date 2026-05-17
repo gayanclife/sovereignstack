@@ -1,0 +1,200 @@
+{
+  "title": "System Metrics",
+  "uid": "sovereignstack-system",
+  "version": 1,
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["sovereignstack", "system"],
+  "panels": [
+
+    { "type": "row", "title": "Overview", "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }, "collapsed": false, "id": 100 },
+
+    {
+      "id": 1, "type": "stat", "title": "CPU Usage",
+      "gridPos": { "x": 0, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "targets": [{
+        "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)",
+        "legendFormat": "cpu %", "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+
+    {
+      "id": 2, "type": "stat", "title": "Memory Usage",
+      "gridPos": { "x": 6, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "targets": [{
+        "expr": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100",
+        "legendFormat": "mem %", "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+
+    {
+      "id": 3, "type": "stat", "title": "Disk Usage",
+      "gridPos": { "x": 12, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [{
+        "expr": "(1 - (node_filesystem_avail_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"} / node_filesystem_size_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"})) * 100",
+        "legendFormat": "disk %", "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+
+    {
+      "id": 4, "type": "stat", "title": "System Load (1m)",
+      "gridPos": { "x": 18, "y": 1, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [
+            { "color": "green", "value": null }, { "color": "yellow", "value": 4 }, { "color": "red", "value": 8 }
+          ]}
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" },
+      "targets": [{
+        "expr": "node_load1",
+        "legendFormat": "load 1m", "datasource": { "type": "prometheus", "uid": "prometheus" }
+      }]
+    },
+
+    { "type": "row", "title": "CPU", "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 }, "collapsed": false, "id": 101 },
+
+    {
+      "id": 5, "type": "timeseries", "title": "CPU Usage %",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "lineWidth": 2 } }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)", "legendFormat": "total", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "avg by(instance) (rate(node_cpu_seconds_total{mode=\"user\"}[2m])) * 100", "legendFormat": "user", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "avg by(instance) (rate(node_cpu_seconds_total{mode=\"system\"}[2m])) * 100", "legendFormat": "system", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "avg by(instance) (rate(node_cpu_seconds_total{mode=\"iowait\"}[2m])) * 100", "legendFormat": "iowait", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+
+    {
+      "id": 6, "type": "timeseries", "title": "System Load",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "node_load1",  "legendFormat": "1m",  "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_load5",  "legendFormat": "5m",  "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_load15", "legendFormat": "15m", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+
+    { "type": "row", "title": "Memory", "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 }, "collapsed": false, "id": 102 },
+
+    {
+      "id": 7, "type": "timeseries", "title": "Memory Usage",
+      "gridPos": { "x": 0, "y": 15, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "node_memory_MemTotal_bytes",                            "legendFormat": "total",     "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes", "legendFormat": "used", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_memory_MemAvailable_bytes",                        "legendFormat": "available", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_memory_Cached_bytes",                              "legendFormat": "cached",    "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_memory_Buffers_bytes",                             "legendFormat": "buffers",   "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+
+    {
+      "id": 8, "type": "timeseries", "title": "Swap Usage",
+      "gridPos": { "x": 12, "y": 15, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "node_memory_SwapTotal_bytes",                              "legendFormat": "total", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes", "legendFormat": "used",  "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+
+    { "type": "row", "title": "Disk", "gridPos": { "x": 0, "y": 23, "w": 24, "h": 1 }, "collapsed": false, "id": 103 },
+
+    {
+      "id": 9, "type": "timeseries", "title": "Disk I/O",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "rate(node_disk_read_bytes_total[2m])",    "legendFormat": "read {{device}}",  "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "rate(node_disk_written_bytes_total[2m])", "legendFormat": "write {{device}}", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+
+    {
+      "id": 10, "type": "timeseries", "title": "Disk Space — /",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "node_filesystem_size_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"}",  "legendFormat": "total",     "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "node_filesystem_avail_bytes{mountpoint=\"/\",fstype!=\"tmpfs\"}", "legendFormat": "available", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+
+    { "type": "row", "title": "Network", "gridPos": { "x": 0, "y": 32, "w": 24, "h": 1 }, "collapsed": false, "id": 104 },
+
+    {
+      "id": 11, "type": "timeseries", "title": "Network Throughput",
+      "gridPos": { "x": 0, "y": 33, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "rate(node_network_receive_bytes_total{device!~\"lo|docker.*|veth.*\"}[2m])",  "legendFormat": "rx {{device}}", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "rate(node_network_transmit_bytes_total{device!~\"lo|docker.*|veth.*\"}[2m])", "legendFormat": "tx {{device}}", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    },
+
+    {
+      "id": 12, "type": "timeseries", "title": "Network Errors & Drops",
+      "gridPos": { "x": 12, "y": 33, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "pps", "custom": { "lineWidth": 2 } } },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "expr": "rate(node_network_receive_errs_total{device!~\"lo|docker.*|veth.*\"}[2m])",   "legendFormat": "rx errors {{device}}", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "rate(node_network_receive_drop_total{device!~\"lo|docker.*|veth.*\"}[2m])",   "legendFormat": "rx drops {{device}}", "datasource": { "type": "prometheus", "uid": "prometheus" } },
+        { "expr": "rate(node_network_transmit_errs_total{device!~\"lo|docker.*|veth.*\"}[2m])",  "legendFormat": "tx errors {{device}}", "datasource": { "type": "prometheus", "uid": "prometheus" } }
+      ]
+    }
+
+  ]
+}
